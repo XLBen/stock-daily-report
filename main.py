@@ -22,13 +22,13 @@ LEVEL_CRITICAL = 3 # 异常分 > 4.5
 
 def is_trading_time():
     """交易时间检查"""
-    now = datetime.now(TIMEZONE)
+    #now = datetime.now(TIMEZONE)
     # 暂时把周末检查注释掉，方便你现在测试
     # if now.weekday() >= 5: return 0, "周末休市"
     
     current_time = now.time()
     # 稍微放宽一点时间，方便测试
-    if current_time < time(4, 0): return 1, "盘前等待"
+    #if current_time < time(4, 0): return 1, "盘前等待"
     return 2, "盘中/盘后交易"
 
 # --- 替代 pandas_ta 的原生计算函数 ---
