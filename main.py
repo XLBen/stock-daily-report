@@ -14,20 +14,14 @@ import ai
 import health
 import plotter
 import traceback
-# 引入新的技术分析模块
 from technical import TechnicalAnalyzer
 
-# --- 核心配置 ---
 STOCKS = ['NVDA', 'AAPL', 'TSLA', 'AMD', 'MSFT', 'META', 'GOOGL']
 TIMEZONE = pytz.timezone('US/Eastern')
-
-# 状态定义
 LEVEL_NORMAL = 0
 LEVEL_NOTICE = 1   
 LEVEL_WARNING = 2  
 LEVEL_CRITICAL = 3 
-
-# --- 辅助函数 ---
 
 def is_trading_time():
     now = datetime.now(TIMEZONE)
@@ -38,22 +32,15 @@ def is_trading_time():
     return 2, "盘中交易"
 
 def calculate_anomaly_score(symbol, current_price, df_hist):
-    """计算异常分 (基于历史波动)"""
     try:
         if len(df_hist) < 20: return 0.0, 0.0
         returns = df_hist['Close'].pct_change().dropna()
-        prev_close = df_hist['Close'].iloc[-2]
-        if prev_close == 0: return 0.0, 0.0
-        
-        current_pct = ((current_price - prev_close) / prev_close) * 100
-        median_ret = returns.median()
-        mad = np.abs(returns - median_ret).median()
-        if mad == 0: mad = 0.001 
-        robust_sigma = 1.4826 * mad
-        score = np.abs((current_pct/100) - median_ret) / robust_sigma
+        current_pct = ((current_price - df_hist['Close'].iloc[-2]) / df_hist['Close'].iloc[-2]) * 100
+        mad = np.abs(returns - returns.median()).median()
+        if mad == 0: mad = 0.001
+        score = np.abs((current_pct/100) - returns.median()) / (1.4826 * mad)
         return score, current_pct
-    except:
-        return 0.0, 0.0
+    except: return 0.0, 0.0
 
 def determine_level(score):
     if score >= 4.5: return LEVEL_CRITICAL
@@ -61,81 +48,83 @@ def determine_level(score):
     if score >= 2.0: return LEVEL_NOTICE
     return LEVEL_NORMAL
 
-# --- 📧 核心：HTML 报告生成器 (V5.0) ---
+# --- 📧 邮件 HTML 生成 (重点修改) ---
 
 def generate_stock_html(data, is_summary=False):
     symbol = data['symbol']
     pct = data['change_pct']
-    price = data['price']
-    
-    # 颜色定义
     color_pct = "red" if pct < 0 else "green"
     
-    # 解析技术信号 (Technical Analysis Results)
     tech = data.get('tech_analysis') or {}
     signals = tech.get('signals') or {}
-    risk = tech.get('risk_control') or {}
+    setup = tech.get('trade_setup') or {} # 获取买卖建议
     
-    # 左侧信号解析
     left_sig = signals.get('left_side', ('-', '-', '-'))
-    left_color = "red" if "卖出" in left_sig[1] else "green" if "买入" in left_sig[1] else "#666"
-    
-    # 右侧信号解析
     right_sig = signals.get('right_side', ('-', '-', '-'))
-    right_color = "red" if "离场" in right_sig[1] else "green" if "加仓" in right_sig[1] or "低吸" in right_sig[1] else "#666"
-
-    # 图表部分
+    
+    # 图表
     chart_html = ""
     if data['chart_path']:
         chart_html = f'<div style="text-align: center; margin: 10px 0;"><img src="cid:{data["chart_cid"]}" style="width: 100%; max-width: 600px; border: 1px solid #ddd;"></div>'
     else:
         chart_html = f'<p style="color:red; text-align:center;">[图表生成失败]</p>'
 
+    # AI 内容处理 (如果 AI 没返回，显示特定提示)
+    ai_summary = data.get('ai_summary', 'AI未返回数据')
+    ai_left = data.get('ai_left', '-')
+    ai_right = data.get('ai_right', '-')
+    
     return f"""
-    <div style="margin-bottom: 30px; border: 1px solid #eee; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);">
+    <div style="margin-bottom: 30px; border: 1px solid #eee; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); font-family: Arial, sans-serif;">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid {color_pct}; padding-bottom: 5px;">
             <h2 style="margin: 0; color: #333;">{symbol}</h2>
             <div style="text-align: right;">
                 <span style="font-size: 20px; font-weight: bold; color: {color_pct};">{pct:+.2f}%</span>
-                <br/><span style="font-size: 12px; color: #888;">${price:.2f}</span>
+                <span style="font-size: 12px; color: #888;"> ${data['price']:.2f}</span>
             </div>
         </div>
 
         <div style="margin-top: 15px;">
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
                 <tr style="background-color: #f4f4f4;">
-                    <th style="padding: 8px; text-align: left; width: 50%;">🐻 左侧 (逆势猎手)</th>
-                    <th style="padding: 8px; text-align: left; width: 50%;">🐂 右侧 (趋势跟随)</th>
+                    <th style="padding: 8px; text-align: left; width: 50%;">🐻 左侧 (逆势)</th>
+                    <th style="padding: 8px; text-align: left; width: 50%;">🐂 右侧 (顺势)</th>
                 </tr>
                 <tr>
                     <td style="padding: 8px; border-bottom: 1px solid #eee; vertical-align: top;">
-                        <strong style="color: {left_color}; font-size: 14px;">{left_sig[0]} - {left_sig[1]}</strong>
-                        <p style="margin: 5px 0 0 0; color: #555; font-size: 12px;">{left_sig[2]}</p>
-                        <div style="margin-top: 8px; font-style: italic; color: #0056b3; background-color: #f0f8ff; padding: 5px; border-radius: 4px;">
-                            🤖 <strong>AI View:</strong> {data['ai_left']}
+                        <strong>{left_sig[0]} - {left_sig[1]}</strong>
+                        <p style="margin: 5px 0; color: #666; font-size: 11px;">{left_sig[2]}</p>
+                        <div style="background-color: #f0f8ff; padding: 5px; border-radius: 4px; font-style: italic; color: #0056b3;">
+                            🤖 {ai_left}
                         </div>
                     </td>
                     <td style="padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; border-left: 1px solid #eee;">
-                        <strong style="color: {right_color}; font-size: 14px;">{right_sig[0]} - {right_sig[1]}</strong>
-                        <p style="margin: 5px 0 0 0; color: #555; font-size: 12px;">{right_sig[2]}</p>
-                        <div style="margin-top: 8px; font-style: italic; color: #0056b3; background-color: #f0f8ff; padding: 5px; border-radius: 4px;">
-                            🤖 <strong>AI View:</strong> {data['ai_right']}
+                        <strong>{right_sig[0]} - {right_sig[1]}</strong>
+                        <p style="margin: 5px 0; color: #666; font-size: 11px;">{right_sig[2]}</p>
+                        <div style="background-color: #f0f8ff; padding: 5px; border-radius: 4px; font-style: italic; color: #0056b3;">
+                            🤖 {ai_right}
                         </div>
                     </td>
                 </tr>
             </table>
         </div>
 
-        <div style="margin-top: 10px; background-color: #fff5f5; border: 1px solid #ffcccc; padding: 10px; border-radius: 5px; color: #b71c1c; font-size: 13px;">
-            <strong>📉 止损/风控参考:</strong><br/>
-            若成本 > <strong>${risk.get('support_price', 0)}</strong> (生命线)，建议止损位设在 <strong>${risk.get('stop_loss_price', 0)}</strong> (ATR波动)。<br/>
-            <span style="color: #666; font-size: 12px;">建议: {risk.get('advice', '无')}</span>
+        <div style="margin-top: 10px; background-color: #f0fff4; border: 1px solid #c6f6d5; padding: 10px; border-radius: 5px; color: #2f855a; font-size: 13px;">
+            <strong>🛒 机会/加仓参考:</strong><br/>
+            关注 <strong>${setup.get('buy_target_price', 0)}</strong> 附近 ({setup.get('buy_desc', '-')})。<br/>
+            <span style="font-size: 11px; opacity: 0.8;">逻辑: 支撑位低吸或趋势回踩。</span>
+        </div>
+
+        <div style="margin-top: 5px; background-color: #fff5f5; border: 1px solid #fed7d7; padding: 10px; border-radius: 5px; color: #c53030; font-size: 13px;">
+            <strong>🛡️ 风险/止损参考:</strong><br/>
+            跌破 <strong>${setup.get('stop_loss_price', 0)}</strong> (2倍ATR) 建议止损。<br/>
+            <span style="font-size: 11px; opacity: 0.8;">关键支撑: {setup.get('support_desc', '-')}</span>
         </div>
 
         {chart_html}
 
         <div style="font-size: 12px; color: #666; margin-top: 5px; border-top: 1px dashed #ccc; padding-top: 5px;">
-            <strong>📰 News:</strong> {data['ai_summary']}
+            <strong>📰 摘要:</strong> {ai_summary}
         </div>
     </div>
     """
@@ -143,176 +132,110 @@ def generate_stock_html(data, is_summary=False):
 def attach_image(msg, path, cid):
     try:
         with open(path, 'rb') as f:
-            mime_img = MIMEImage(f.read())
-            mime_img.add_header('Content-ID', f'<{cid}>')
-            msg.attach(mime_img)
-    except Exception as e:
-        print(f"⚠️ 图片嵌入失败 {path}: {e}")
+            msg.attach(MIMEImage(f.read(), name=os.path.basename(path), _subtype="png", content_id=f'<{cid}>'))
+    except: pass
 
 def send_smtp(sender, password, receivers, msg):
     try:
-        smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-        smtp_obj.login(sender, password)
-        smtp_obj.sendmail(sender, receivers, msg.as_string())
-        smtp_obj.quit()
-    except Exception as e:
-        print(f"❌ SMTP 发送失败: {e}")
+        s = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        s.login(sender, password)
+        s.sendmail(sender, receivers, msg.as_string())
+        s.quit()
+    except Exception as e: print(f"❌ SMTP Error: {e}")
 
-def send_summary_report(data_list, report_reason):
+def send_summary_report(data_list, reason):
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     if not sender: return
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
-
-    # 排序：优先展示触发了“极端”信号的股票，其次按涨跌幅
-    def sort_key(x):
-        sig_l = x.get('tech_analysis', {}).get('signals', {}).get('left_side', ('', '', ''))[0]
-        sig_r = x.get('tech_analysis', {}).get('signals', {}).get('right_side', ('', '', ''))[0]
-        is_extreme = "极端" in sig_l or "极端" in sig_r
-        return (not is_extreme, -abs(x['change_pct'])) # False排前面(即极端), 然后按波动大排
-        
-    sorted_data = sorted(data_list, key=sort_key)
-    top_stock = sorted_data[0]
     
-    subject = f"{report_reason}：{top_stock['symbol']} {top_stock['change_pct']:+.2f}% | 量化投顾 V5.0"
+    # 排序：极端信号优先
+    data_list.sort(key=lambda x: "极端" not in str(x.get('tech_analysis')), reverse=False)
 
     msg = MIMEMultipart()
-    msg['Subject'] = Header(subject, 'utf-8')
+    msg['Subject'] = Header(f"{reason} | 量化投顾 V5.1 (UI Upgrade)", 'utf-8')
     msg['From'] = sender
     msg['To'] = ",".join(receivers)
 
-    full_content = f"""
-    <html><body style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 800px; margin: 0 auto; color: #333;">
-        <h2 style="text-align: center; color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 15px;">
-            🤖 QuantBot 智能投顾报告
-        </h2>
-        <p style="text-align: center; color: #7f8c8d; font-size: 12px; margin-bottom: 30px;">
-            {report_reason} | {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S ET')}
-        </p>
-    """
-    for data in sorted_data:
-        full_content += generate_stock_html(data, True)
+    html = f"""<html><body style="max-width:800px; margin:0 auto;">
+    <h2 style="text-align:center; color:#2c3e50;">🤖 QuantBot V5.1</h2>
+    <p style="text-align:center; color:gray;">{reason}</p>"""
+    for d in data_list: html += generate_stock_html(d)
+    html += "</body></html>"
     
-    full_content += "</body></html>"
-    msg.attach(MIMEText(full_content, 'html', 'utf-8'))
-    
-    for data in sorted_data:
-        if data['chart_path']: attach_image(msg, data['chart_path'], data['chart_cid'])
+    msg.attach(MIMEText(html, 'html', 'utf-8'))
+    for d in data_list: 
+        if d['chart_path']: attach_image(msg, d['chart_path'], d['chart_cid'])
 
     send_smtp(sender, password, receivers, msg)
-    print(f"✅ V5.0 投顾报告已发送")
-
-def send_single_alert(data):
-    """(保留原有报警功能)"""
-    sender = os.environ.get('MAIL_USER')
-    if not sender: return
-    # ... (为了节省篇幅，报警逻辑可复用 summary 生成的 HTML 卡片) ...
-    # 这里我们简化，报警也用 generate_stock_html
-    pass # 实际代码中你可以复制上面的 send_summary_report 逻辑稍作修改
-
-# --- 主程序 ---
+    print("✅ 邮件已发送")
 
 def run_monitor():
     db.init_db()
     
-    # 任务检查
-    tasks = []
-    try: tasks = health.get_pending_tasks()
-    except: pass
+    # 强制调试逻辑
+    force_reason = None
+    if datetime.now(TIMEZONE).weekday() >= 5: force_reason = "🚀 V5.1 调试报告"
     
-    force_report_reason = None
-    for task_type, reason in tasks:
-        if task_type == 'REPORT_ALL':
-            force_report_reason = reason
-            break
-            
-    # 🔥 调试保险：如果周末且没任务，强制跑一次
-    if not force_report_reason and datetime.now(TIMEZONE).weekday() >= 5:
-        force_report_reason = "🚀 V5.0 升级测试报告"
+    # 正常任务检查
+    try:
+        tasks = health.get_pending_tasks()
+        for t, r in tasks: 
+            if t == 'REPORT_ALL': force_reason = r
+    except: pass
 
-    status_code, status_msg = is_trading_time()
-    print(f"🚀 启动监控 - {status_msg}")
-
-    if status_code == 0 and not force_report_reason:
+    status_code, _ = is_trading_time()
+    if status_code == 0 and not force_reason:
         print("😴 休市...")
         return
 
-    today_str = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
-    report_data_list = [] 
+    today = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
+    report_data = []
 
     for symbol in STOCKS:
         try:
-            print(f"📊 分析中: {symbol}...")
+            print(f"📊 {symbol}...")
             ticker = yf.Ticker(symbol)
+            df = ticker.history(period="6mo")
+            if df.empty: continue
             
-            # 1. 获取较长历史数据 (用于技术指标)
-            df_hist = ticker.history(period="6mo")
-            if df_hist.empty:
-                print(f"⚠️ {symbol} 无历史数据")
-                continue
-                
-            current_price = df_hist['Close'].iloc[-1]
+            curr_price = df['Close'].iloc[-1]
+            ta = TechnicalAnalyzer(df)
+            tech_res = ta.analyze()
+            score, pct = calculate_anomaly_score(symbol, curr_price, df)
             
-            # 2. 核心数学计算 (Technical Analyzer)
-            ta = TechnicalAnalyzer(df_hist)
-            tech_result = ta.analyze() # 获取硬逻辑信号
-            
-            # 计算波动分
-            score, change_pct = calculate_anomaly_score(symbol, current_price, df_hist)
-            current_level = determine_level(score)
-
-            # 3. 准备数据包
-            stock_data = {
-                'symbol': symbol,
-                'price': current_price,
-                'change_pct': change_pct,
-                'level': current_level,
-                'tech_analysis': tech_result, # 存入技术指标
+            data = {
+                'symbol': symbol, 'price': curr_price, 'change_pct': pct,
+                'tech_analysis': tech_res,
                 'news': ai.get_latest_news(symbol),
-                'chart_path': plotter.generate_chart(symbol), # 包含线性回归的新图
+                'chart_path': plotter.generate_chart(symbol),
                 'chart_cid': f"chart_{symbol}_{datetime.now().strftime('%H%M%S')}"
             }
-
-            # 4. AI 角色扮演分析
-            print(f"🧠 AI 深度思考: {symbol}...")
+            
+            # AI 调用 (增加详细日志)
+            print(f"🧠 AI Thinking: {symbol}...")
+            if not os.environ.get("LLM_BASE_URL"): os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+            
             try:
-                if not os.environ.get("LLM_BASE_URL"): os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+                ai_res = ai.analyze_market_move(symbol, pct, data['news'], tech_res)
+                # 🔥 调试打印：把 AI 返回的原始 JSON 打印出来，看看到底是不是空的
+                print(f"🔍 AI Raw Response: {ai_res}") 
                 
-                # 传入技术数据给 AI
-                ai_res = ai.analyze_market_move(symbol, change_pct, stock_data['news'], tech_data=tech_result)
-                
-                stock_data['ai_summary'] = ai_res.get('summary', '无')
-                stock_data['ai_left'] = ai_res.get('left_side_analysis', '无')
-                stock_data['ai_right'] = ai_res.get('right_side_analysis', '无')
+                data['ai_summary'] = ai_res.get('summary', 'AI数据为空')
+                data['ai_left'] = ai_res.get('left_side_analysis', '-')
+                data['ai_right'] = ai_res.get('right_side_analysis', '-')
             except Exception as e:
-                print(f"❌ AI 失败: {e}")
-                stock_data['ai_summary'] = "AI Unavailable"
-                stock_data['ai_left'] = "-"
-                stock_data['ai_right'] = "-"
+                print(f"❌ AI Error: {e}")
+                data['ai_summary'] = f"AI Error: {str(e)}"
 
-            report_data_list.append(stock_data)
-            db.update_stock_state(symbol, today_str, current_level, current_price, score)
-
+            report_data.append(data)
+            db.update_stock_state(symbol, today, determine_level(score), curr_price, score)
         except Exception as e:
-            print(f"❌ {symbol} 失败: {e}")
             traceback.print_exc()
 
-    if force_report_reason and report_data_list:
-        print("📤 发送投顾报告...")
-        send_summary_report(report_data_list, force_report_reason)
-        
-    for d in report_data_list:
-        if d['chart_path'] and os.path.exists(d['chart_path']):
-            try: os.remove(d['chart_path'])
-            except: pass
-
-    db.log_system_run("SUCCESS", "V5.0 Cycle Completed")
+    if force_reason and report_data:
+        send_summary_report(report_data, force_reason)
 
 if __name__ == "__main__":
-    try:
-        run_monitor()
-    except Exception as e:
-        print(f"❌ 致命错误: {e}")
-        exit(1)
-        
+    run_monitor()
