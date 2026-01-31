@@ -50,7 +50,9 @@ jobs:
           if [[ -n $(git status -s quant_state.db) ]]; then
             git add quant_state.db
             git commit -m "Auto-save state [skip ci]"
-            git push
+            # 加入 pull --rebase 解决 rejected 冲突
+            git pull --rebase origin main
+            git push origin main
           fi
 
       # 【新增】如果上面的运行失败了，利用 Github 插件发邮件 (或者仅仅依靠 GitHub 自己的通知)
