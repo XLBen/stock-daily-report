@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 from email.header import Header
 import numpy as np
 import ai      # 引入 AI 模块
-import health  # <--- 关键修复：引入健康监控模块
+import health  # 引入健康监控模块
 import traceback
 
 # --- 核心配置 ---
@@ -23,69 +23,23 @@ LEVEL_WARNING = 2
 LEVEL_CRITICAL = 3 
 
 def is_trading_time():
-    """
-    真实交易时间检查
-    """
+    """真实交易时间检查"""
     now = datetime.now(TIMEZONE)
-    
-    # 1. 周末检查
-    if now.weekday() >= 5:
-        return 0, "周末休市"
-    
+    if now.weekday() >= 5: return 0, "周末休市"
     current_time = now.time()
-    
-    # 2. 时段检查
-    if current_time < time(9, 30):
-        return 1, "盘前时段"
-    elif current_time > time(16, 0):
-        return 1, "盘后时段"
-    
+    if current_time < time(9, 30): return 1, "盘前时段"
+    elif current_time > time(16, 0): return 1, "盘后时段"
     return 2, "盘中交易"
-
-def calculate_anomaly_score(symbol, current_price):
-    """
-    核心算法：基于 MAD 的稳健波动率计算
-    """
-    try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="1mo")
-        
-        if len(hist) < 20: return 0.0, 0.0
-
-        returns = hist['Close'].pct_change().dropna()
-        prev_close = hist['Close'].iloc[-2]
-        if prev_close == 0: return 0.0, 0.0
-        
-        current_pct = ((current_price - prev_close) / prev_close) * 100
-        
-        median_ret = returns.median()
-        mad = np.abs(returns - median_ret).median()
-        if mad == 0: mad = 0.001 
-
-        robust_sigma = 1.4826 * mad
-        score = np.abs((current_pct/100) - median_ret) / robust_sigma
-        
-        return score, current_pct
-        
-    except Exception as e:
-        print(f"[{symbol}] 算法计算错误: {e}")
-        return 0.0, 0.0
-
-def determine_level(score):
-    if score >= 4.5: return LEVEL_CRITICAL
-    if score >= 3.0: return LEVEL_WARNING
-    if score >= 2.0: return LEVEL_NOTICE
-    return LEVEL_NORMAL
 
 def get_valuation_data(symbol):
     """
-    获取估值数据 (PE, Forward PE, PEG, 52周位置)
+    【新增】获取估值数据 (PE, Forward PE, PEG, 52周位置)
     """
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
         
-        # 获取核心指标，如果拿不到就给 None
+        # 获取核心指标
         trailing_pe = info.get('trailingPE')
         forward_pe = info.get('forwardPE')
         peg_ratio = info.get('pegRatio')
@@ -113,11 +67,41 @@ def get_valuation_data(symbol):
         print(f"[{symbol}] 估值数据获取失败: {e}")
         return None
 
+def calculate_anomaly_score(symbol, current_price):
+    """核心算法：基于 MAD 的稳健波动率计算"""
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1mo")
+        if len(hist) < 20: return 0.0, 0.0
+
+        returns = hist['Close'].pct_change().dropna()
+        prev_close = hist['Close'].iloc[-2]
+        if prev_close == 0: return 0.0, 0.0
+        
+        current_pct = ((current_price - prev_close) / prev_close) * 100
+        
+        median_ret = returns.median()
+        mad = np.abs(returns - median_ret).median()
+        if mad == 0: mad = 0.001 
+
+        robust_sigma = 1.4826 * mad
+        score = np.abs((current_pct/100) - median_ret) / robust_sigma
+        
+        return score, current_pct
+    except Exception as e:
+        print(f"[{symbol}] 算法计算错误: {e}")
+        return 0.0, 0.0
+
+def determine_level(score):
+    if score >= 4.5: return LEVEL_CRITICAL
+    if score >= 3.0: return LEVEL_WARNING
+    if score >= 2.0: return LEVEL_NOTICE
+    return LEVEL_NORMAL
+
 def send_alert_email(symbol, level, price, change_pct, score):
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
-    
     if not sender: return
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
     
@@ -135,7 +119,7 @@ def send_alert_email(symbol, level, price, change_pct, score):
         analysis = {"summary": "波动未达阈值", "category": "常规", "risk_level": "低"}
         news = ai.get_latest_news(symbol)
 
-    # 2. 【新增】获取估值数据
+    # 2. 【新增】获取估值看板
     val = get_valuation_data(symbol)
     val_html = ""
     if val:
@@ -144,21 +128,23 @@ def send_alert_email(symbol, level, price, change_pct, score):
         pos_pct = val['pos_52w'] * 100
         
         val_html = f"""
-        <div style="background-color: #e8f4fd; padding: 10px; border-radius: 5px; margin-top: 10px;">
-            <p><strong>📊 估值看板:</strong></p>
-            <table style="width: 100%; font-size: 14px;">
+        <div style="background-color: #f0f8ff; padding: 12px; border-radius: 6px; margin: 15px 0; border: 1px solid #cceeff;">
+            <p style="margin: 0 0 10px 0;"><strong>📊 估值安全垫分析:</strong></p>
+            <table style="width: 100%; font-size: 14px; border-collapse: collapse;">
                 <tr>
-                    <td>PE (静): <strong>{val['pe'] if val['pe'] else '-'}</strong></td>
-                    <td>PE (动): <strong>{val['f_pe'] if val['f_pe'] else '-'}</strong></td>
+                    <td style="padding: 4px;">PE (静): <strong>{val['pe'] if val['pe'] else '-'}</strong></td>
+                    <td style="padding: 4px;">PE (动): <strong>{val['f_pe'] if val['f_pe'] else '-'}</strong></td>
                 </tr>
                 <tr>
-                    <td>PEG: <strong>{val['peg'] if val['peg'] else '-'} ({peg_eval})</strong></td>
-                    <td>PB: <strong>{val['pb'] if val['pb'] else '-'}</strong></td>
+                    <td style="padding: 4px;">PEG: <strong>{val['peg'] if val['peg'] else '-'} ({peg_eval})</strong></td>
+                    <td style="padding: 4px;">PB: <strong>{val['pb'] if val['pb'] else '-'}</strong></td>
                 </tr>
                 <tr>
-                    <td colspan="2">
-                        52周位置: <span style="color: {'green' if pos_pct < 20 else 'black'}">{pos_pct:.1f}%</span> 
-                        <span style="font-size: 10px; color: gray;">(低 {val['low_52']} - 高 {val['high_52']})</span>
+                    <td colspan="2" style="padding: 4px; border-top: 1px dashed #ccc; padding-top: 8px;">
+                        <strong>52周位置:</strong> 
+                        <span style="color: {'green' if pos_pct < 20 else 'red' if pos_pct > 80 else 'black'}">{pos_pct:.1f}%</span> 
+                        <br/>
+                        <span style="font-size: 11px; color: gray;">(Low ${val['low_52']} ⟷ High ${val['high_52']})</span>
                     </td>
                 </tr>
             </table>
@@ -173,18 +159,30 @@ def send_alert_email(symbol, level, price, change_pct, score):
     content = f"""
     <html>
     <body>
-        <h2>{symbol} 异常波动监控</h2>
-        <p>现价: ${price:.2f} (<span style="color:{color}">{change_pct:+.2f}%</span>)</p>
-        <p>异常分: {score:.1f}</p>
+        <h2 style="border-bottom: 2px solid {color}; padding-bottom: 5px;">{symbol} 异常波动监控</h2>
+        <p style="font-size: 16px;">
+            现价: <strong>${price:.2f}</strong> 
+            (<span style="color:{color}">{change_pct:+.2f}%</span>)
+        </p>
+        <p>异常评分: {score:.1f} (Level {level})</p>
         
-        {val_html} <hr/>
-        <h3>AI 分析</h3>
-        <p><strong>原因:</strong> {analysis.get('summary')}</p>
-        <p><strong>风险:</strong> {analysis.get('risk_level')}</p>
-        <hr/>
-        <h3>新闻</h3>
+        {val_html} <hr style="border: 0; border-top: 1px solid #eee;" />
+        
+        <h3>🧠 AI 归因分析</h3>
+        <div style="background-color: #fafafa; padding: 10px; border-left: 4px solid #333;">
+            <p><strong>原因:</strong> {analysis.get('summary')}</p>
+            <p><strong>分类:</strong> {analysis.get('category')} | <strong>风险:</strong> {analysis.get('risk_level')}</p>
+            <p><strong>建议:</strong> {analysis.get('action_suggestion', '暂无')}</p>
+        </div>
+        
+        <hr style="border: 0; border-top: 1px solid #eee;" />
+        
+        <h3>📰 最新新闻</h3>
         <ul>{''.join([f'<li>{n}</li>' for n in news[:3]])}</ul>
-        <p>时间: {datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}</p>
+        
+        <p style="font-size: 10px; color: gray; text-align: right;">
+            Generated by QuantBot | {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S ET')}
+        </p>
     </body>
     </html>
     """
@@ -204,18 +202,13 @@ def send_alert_email(symbol, level, price, change_pct, score):
         print(f"❌ 发送失败: {e}")
 
 def run_monitor():
-    # 1. 初始化
     db.init_db()
-    
-    # 2. 健康检查 (修复点：确保 health 模块已导入)
     try:
         health.check_system_health()
     except Exception as e:
-        print(f"⚠️ 健康检查失败: {e}")
-        # 打印详细错误栈，方便调试
+        print(f"⚠️ 健康检查异常: {e}")
         traceback.print_exc()
 
-    # 3. 市场检查
     status_code, status_msg = is_trading_time()
     print(f"🚀 启动监控 - {status_msg}")
     
@@ -247,6 +240,7 @@ def run_monitor():
             is_level_up = (current_level > prev_level)
             is_critical = (current_level == LEVEL_CRITICAL)
             
+            # 报警触发逻辑
             if (is_level_up and current_level >= LEVEL_NOTICE) or is_critical:
                 print(f"🔔 触发报警: {symbol}")
                 send_alert_email(symbol, current_level, current_price, change_pct, score)
