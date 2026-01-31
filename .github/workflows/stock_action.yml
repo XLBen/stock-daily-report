@@ -36,6 +36,8 @@ jobs:
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASS: ${{ secrets.MAIL_PASS }}
           MAIL_RECEIVER: ${{ secrets.MAIL_RECEIVER }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
         run: python main.py
 
       # 核心改动：如果数据库变了，提交回仓库
