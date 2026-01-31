@@ -4,62 +4,84 @@ from email.header import Header
 import yfinance as yf
 import os
 from datetime import datetime
-import base64
 
+# 你的关注列表
 STOCKS = ['AAPL', 'MSFT', 'NVDA']
 
 def get_stock_data():
-    msg_content = "今日股票快报：\n\n"
+    msg_content = "今日量化简报 (MA5策略观察)：\n\n"
+    
     for symbol in STOCKS:
         try:
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d")
-            if not hist.empty:
-                close_price = hist['Close'].iloc[0]
-                msg_content += f"{symbol}: ${close_price:.2f}\n"
+            # 修改点1：我们需要更多历史数据来计算均线，这里拉取过去1个月
+            hist = ticker.history(period="1mo")
+            
+            if len(hist) >= 5:
+                # 获取最新一天的收盘价
+                current_price = hist['Close'].iloc[-1]
+                
+                # 修改点2：计算 5日移动平均线 (MA5)
+                # rolling(5) 表示取5天窗口，mean() 表示求平均
+                hist['MA5'] = hist['Close'].rolling(window=5).mean()
+                ma5_price = hist['MA5'].iloc[-1]
+                
+                # 修改点3：进行逻辑判断 (量化分析的核心)
+                if current_price > ma5_price:
+                    trend = "📈 强势 (高于均线)"
+                else:
+                    trend = "📉 弱势 (低于均线)"
+                
+                # 计算偏离度 (看看现在的价格偏离平均值多少百分比)
+                diff_percent = ((current_price - ma5_price) / ma5_price) * 100
+                
+                msg_content += f"【{symbol}】\n"
+                msg_content += f"现价: ${current_price:.2f}\n"
+                msg_content += f"MA5均价: ${ma5_price:.2f}\n"
+                msg_content += f"趋势判断: {trend}\n"
+                msg_content += f"偏离幅度: {diff_percent:+.2f}%\n"
+                msg_content += "-" * 20 + "\n"
+                
             else:
-                msg_content += f"{symbol}: 无法获取数据\n"
+                msg_content += f"{symbol}: 数据不足，无法计算均线\n"
+                
         except Exception as e:
-            msg_content += f"{symbol}: 获取出错 ({str(e)})\n"
+            msg_content += f"{symbol}: 分析出错 ({str(e)})\n"
+            
     return msg_content
 
 def send_email(content):
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
-    receiver_env = os.environ.get('MAIL_RECEIVER') # 获取那串长字符串
+    receiver_env = os.environ.get('MAIL_RECEIVER')
+    
+    if not sender or not password or not receiver_env:
+        print("环境配置错误，请检查 Secrets")
+        return
 
-    # --- 关键修改：处理多个邮箱 ---
     if ',' in receiver_env:
-        # 如果发现有逗号，就切割成一个列表 ['a@a.com', 'b@b.com']
         receivers = receiver_env.split(',')
     else:
-        # 如果只有一个邮箱，就把它放进列表里
         receivers = [receiver_env]
     
-    # 邮件构建
     message = MIMEText(content, 'plain', 'utf-8')
     message['From'] = sender
-    # 邮件头部的 "To" 显示所有收件人，用逗号连接
     message['To'] = ",".join(receivers)
     
-    subject = f"股票更新 - {datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"股票量化日报 - {datetime.now().strftime('%Y-%m-%d')}"
     message['Subject'] = Header(subject, 'utf-8')
 
     try:
+        # 如果是 QQ 邮箱请改用 smtp.qq.com
         smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465) 
-        # 注意：如果你用的是 QQ 邮箱，记得把上面改成 'smtp.qq.com'
-        
         smtp_obj.login(sender, password)
-        
-        # --- 关键修改：发送给列表里的所有人 ---
         smtp_obj.sendmail(sender, receivers, message.as_string())
-        
         smtp_obj.quit()
-        print(f"邮件已成功发送给: {receivers}")
+        print(f"分析报告已发送给: {receivers}")
     except smtplib.SMTPException as e:
-        print(f"邮件发送失败: {e}")
-        
+        print(f"发送失败: {e}")
+
 if __name__ == "__main__":
-    stock_info = get_stock_data()
-    print(stock_info)
-    send_email(stock_info)
+    analysis = get_stock_data()
+    print(analysis) # 在日志里打印出来方便检查
+    send_email(analysis)
