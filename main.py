@@ -175,14 +175,16 @@ def send_summary_report(data_list, reason):
 
 def run_monitor():
     db.init_db()
-    force_reason = None
-    if datetime.now(TIMEZONE).weekday() >= 5: force_reason = "🚀 V5.2 调试报告"
+    TEST_MODE = True 
     
-    try:
-        for t, r in health.get_pending_tasks():
-            if t == 'REPORT_ALL': force_reason = r
-    except: pass
+    force_reason = None
+    if TEST_MODE:
+        force_reason = "🚀 测试周全程监控报告"
+    elif datetime.now(TIMEZONE).weekday() >= 5:
+        force_reason = "🚀 V5.2 调试报告"
+    # --- 修改结束 ---
 
+    # 这里的逻辑会因为 force_reason 有值而跳过 return
     status_code, _ = is_trading_time()
     if status_code == 0 and not force_reason:
         print("😴 休市...")
