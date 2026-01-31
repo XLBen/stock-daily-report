@@ -179,23 +179,29 @@ def send_summary_report(data_list, reason):
 
 def run_monitor():
     db.init_db()
-    TEST_MODE = True 
+    force_report_reason = None
     
-    force_reason = None
-    if TEST_MODE:
-        force_reason = "🚀 测试周全程监控报告"
-    elif datetime.now(TIMEZONE).weekday() >= 5:
-        force_reason = "🚀 V5.2 调试报告"
-    # --- 修改结束 ---
+    # 1. 检查是否有定时任务（这是通过 health.py 拿到的）
+    try:
+        pending_tasks = health.get_pending_tasks()
+        for task_type, reason in pending_tasks:
+            if task_type == 'REPORT_ALL':
+                force_report_reason = reason # 这里拿到了“20分钟报告”或“心跳”
+                break
+    except Exception as e:
+        print(f"Health Check Error: {e}")
 
-    # 这里的逻辑会因为 force_reason 有值而跳过 return
-    status_code, _ = is_trading_time()
-    if status_code == 0 and not force_reason:
-        print("😴 休市...")
+    status_code, status_msg = is_trading_time()
+    print(f"🚀 启动监控 - {status_msg}")
+
+    # 🛑 核心修改：即便 status_code == 0 (休市)，只要有 force_report_reason，就必须往下走
+    if status_code == 0 and not force_report_reason:
+        print("😴 休市且无定时任务，程序退出。")
         return
 
-    today = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
-    report_data = []
+    # 如果有任务，即便休市也打印出来
+    if force_report_reason:
+        print(f"📋 执行计划任务: {force_report_reason}")
 
     for symbol in STOCKS:
         try:
