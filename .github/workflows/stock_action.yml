@@ -4,7 +4,6 @@ name: Daily Stock Update
 on:
   schedule:
     # 每天国际标准时间 (UTC) 22:00 运行 (相当于北京时间早上 6:00)
-    # 语法格式: '分 时 日 月 周'
     - cron: '0 22 * * *'
   
   # 允许你在 GitHub 页面上手动点击按钮触发测试
@@ -34,7 +33,7 @@ jobs:
       # 4. 运行脚本
       - name: Run stock script
         env:
-          # 将 GitHub Secrets 注入到环境变量中供脚本读取
+          # 这里的缩进非常关键，必须对齐
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASS: ${{ secrets.MAIL_PASS }}
           MAIL_RECEIVER: ${{ secrets.MAIL_RECEIVER }}
