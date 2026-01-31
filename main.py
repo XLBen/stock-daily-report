@@ -48,7 +48,7 @@ def determine_level(score):
     if score >= 2.0: return LEVEL_NOTICE
     return LEVEL_NORMAL
 
-# --- 📧 邮件 HTML 生成 (重点修改) ---
+# --- 邮件组件 ---
 
 def generate_stock_html(data, is_summary=False):
     symbol = data['symbol']
@@ -57,51 +57,48 @@ def generate_stock_html(data, is_summary=False):
     
     tech = data.get('tech_analysis') or {}
     signals = tech.get('signals') or {}
-    setup = tech.get('trade_setup') or {} # 获取买卖建议
+    setup = tech.get('trade_setup') or {}
     
     left_sig = signals.get('left_side', ('-', '-', '-'))
     right_sig = signals.get('right_side', ('-', '-', '-'))
     
-    # 图表
+    # 这里的 src="cid:..." 必须和 attach_image 里的 Content-ID 对应
     chart_html = ""
     if data['chart_path']:
-        chart_html = f'<div style="text-align: center; margin: 10px 0;"><img src="cid:{data["chart_cid"]}" style="width: 100%; max-width: 600px; border: 1px solid #ddd;"></div>'
-    else:
-        chart_html = f'<p style="color:red; text-align:center;">[图表生成失败]</p>'
+        chart_html = f'<div style="text-align: center; margin: 15px 0;"><img src="cid:{data["chart_cid"]}" style="width: 100%; max-width: 650px; border: 1px solid #ddd; border-radius: 4px;"></div>'
 
-    # AI 内容处理 (如果 AI 没返回，显示特定提示)
-    ai_summary = data.get('ai_summary', 'AI未返回数据')
+    ai_summary = data.get('ai_summary', 'AI未返回')
     ai_left = data.get('ai_left', '-')
     ai_right = data.get('ai_right', '-')
     
     return f"""
-    <div style="margin-bottom: 30px; border: 1px solid #eee; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); font-family: Arial, sans-serif;">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid {color_pct}; padding-bottom: 5px;">
-            <h2 style="margin: 0; color: #333;">{symbol}</h2>
+    <div style="margin-bottom: 30px; border: 1px solid #e0e0e0; padding: 20px; border-radius: 8px; background-color: #fff; font-family: Arial, sans-serif;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid {color_pct}; padding-bottom: 8px;">
+            <h2 style="margin: 0; color: #222;">{symbol}</h2>
             <div style="text-align: right;">
-                <span style="font-size: 20px; font-weight: bold; color: {color_pct};">{pct:+.2f}%</span>
-                <span style="font-size: 12px; color: #888;"> ${data['price']:.2f}</span>
+                <span style="font-size: 22px; font-weight: bold; color: {color_pct};">{pct:+.2f}%</span>
+                <span style="font-size: 13px; color: #666;"> ${data['price']:.2f}</span>
             </div>
         </div>
 
         <div style="margin-top: 15px;">
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
-                <tr style="background-color: #f4f4f4;">
-                    <th style="padding: 8px; text-align: left; width: 50%;">🐻 左侧 (逆势)</th>
-                    <th style="padding: 8px; text-align: left; width: 50%;">🐂 右侧 (顺势)</th>
+                <tr style="background-color: #f8f9fa;">
+                    <th style="padding: 10px; text-align: left; width: 50%; border-bottom: 2px solid #ddd;">🐻 左侧 (逆势)</th>
+                    <th style="padding: 10px; text-align: left; width: 50%; border-bottom: 2px solid #ddd;">🐂 右侧 (顺势)</th>
                 </tr>
                 <tr>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee; vertical-align: top;">
-                        <strong>{left_sig[0]} - {left_sig[1]}</strong>
-                        <p style="margin: 5px 0; color: #666; font-size: 11px;">{left_sig[2]}</p>
-                        <div style="background-color: #f0f8ff; padding: 5px; border-radius: 4px; font-style: italic; color: #0056b3;">
+                    <td style="padding: 10px; border-right: 1px solid #eee; vertical-align: top;">
+                        <strong style="font-size: 14px;">{left_sig[0]} - {left_sig[1]}</strong>
+                        <p style="margin: 5px 0; color: #555; font-size: 12px;">{left_sig[2]}</p>
+                        <div style="background-color: #e3f2fd; padding: 6px; border-radius: 4px; font-style: italic; color: #0d47a1; margin-top: 5px;">
                             🤖 {ai_left}
                         </div>
                     </td>
-                    <td style="padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; border-left: 1px solid #eee;">
-                        <strong>{right_sig[0]} - {right_sig[1]}</strong>
-                        <p style="margin: 5px 0; color: #666; font-size: 11px;">{right_sig[2]}</p>
-                        <div style="background-color: #f0f8ff; padding: 5px; border-radius: 4px; font-style: italic; color: #0056b3;">
+                    <td style="padding: 10px; vertical-align: top;">
+                        <strong style="font-size: 14px;">{right_sig[0]} - {right_sig[1]}</strong>
+                        <p style="margin: 5px 0; color: #555; font-size: 12px;">{right_sig[2]}</p>
+                        <div style="background-color: #e3f2fd; padding: 6px; border-radius: 4px; font-style: italic; color: #0d47a1; margin-top: 5px;">
                             🤖 {ai_right}
                         </div>
                     </td>
@@ -109,31 +106,35 @@ def generate_stock_html(data, is_summary=False):
             </table>
         </div>
 
-        <div style="margin-top: 10px; background-color: #f0fff4; border: 1px solid #c6f6d5; padding: 10px; border-radius: 5px; color: #2f855a; font-size: 13px;">
-            <strong>🛒 机会/加仓参考:</strong><br/>
-            关注 <strong>${setup.get('buy_target_price', 0)}</strong> 附近 ({setup.get('buy_desc', '-')})。<br/>
-            <span style="font-size: 11px; opacity: 0.8;">逻辑: 支撑位低吸或趋势回踩。</span>
+        <div style="margin-top: 15px; background-color: #f0fff4; border: 1px solid #c6f6d5; padding: 10px; border-radius: 5px; color: #276749; font-size: 13px;">
+            <strong>🛒 机会/加仓参考:</strong> 关注 <strong>${setup.get('buy_target_price', 0)}</strong> ({setup.get('buy_desc', '-')})
         </div>
 
-        <div style="margin-top: 5px; background-color: #fff5f5; border: 1px solid #fed7d7; padding: 10px; border-radius: 5px; color: #c53030; font-size: 13px;">
-            <strong>🛡️ 风险/止损参考:</strong><br/>
-            跌破 <strong>${setup.get('stop_loss_price', 0)}</strong> (2倍ATR) 建议止损。<br/>
-            <span style="font-size: 11px; opacity: 0.8;">关键支撑: {setup.get('support_desc', '-')}</span>
+        <div style="margin-top: 8px; background-color: #fff5f5; border: 1px solid #fed7d7; padding: 10px; border-radius: 5px; color: #c53030; font-size: 13px;">
+            <strong>🛡️ 风险/止损参考:</strong> 跌破 <strong>${setup.get('stop_loss_price', 0)}</strong> (支撑: {setup.get('support_desc', '-')})
         </div>
 
         {chart_html}
 
-        <div style="font-size: 12px; color: #666; margin-top: 5px; border-top: 1px dashed #ccc; padding-top: 5px;">
+        <div style="font-size: 12px; color: #666; margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 8px;">
             <strong>📰 摘要:</strong> {ai_summary}
         </div>
     </div>
     """
 
+# 🔥 核心修复：图片附件处理
 def attach_image(msg, path, cid):
     try:
         with open(path, 'rb') as f:
-            msg.attach(MIMEImage(f.read(), name=os.path.basename(path), _subtype="png", content_id=f'<{cid}>'))
-    except: pass
+            img_data = f.read()
+            mime_img = MIMEImage(img_data, _subtype="png")
+            # 关键1：Content-ID 必须有尖括号
+            mime_img.add_header('Content-ID', f'<{cid}>')
+            # 关键2：Content-Disposition: inline 强制内嵌显示，而不是作为附件文件
+            mime_img.add_header('Content-Disposition', 'inline', filename=os.path.basename(path))
+            msg.attach(mime_img)
+    except Exception as e:
+        print(f"⚠️ 图片嵌入失败 {path}: {e}")
 
 def send_smtp(sender, password, receivers, msg):
     try:
@@ -150,21 +151,22 @@ def send_summary_report(data_list, reason):
     if not sender: return
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
     
-    # 排序：极端信号优先
     data_list.sort(key=lambda x: "极端" not in str(x.get('tech_analysis')), reverse=False)
 
-    msg = MIMEMultipart()
-    msg['Subject'] = Header(f"{reason} | 量化投顾 V5.1 (UI Upgrade)", 'utf-8')
+    msg = MIMEMultipart('related') # 使用 related 类型，更有利于内嵌图片
+    msg['Subject'] = Header(f"{reason} | QuantBot V5.2", 'utf-8')
     msg['From'] = sender
     msg['To'] = ",".join(receivers)
 
-    html = f"""<html><body style="max-width:800px; margin:0 auto;">
-    <h2 style="text-align:center; color:#2c3e50;">🤖 QuantBot V5.1</h2>
-    <p style="text-align:center; color:gray;">{reason}</p>"""
-    for d in data_list: html += generate_stock_html(d)
-    html += "</body></html>"
+    html_body = f"""<html><body style="max-width:800px; margin:0 auto; background-color: #f9f9f9; padding: 20px;">
+    <h2 style="text-align:center; color:#2c3e50;">🤖 QuantBot V5.2</h2>
+    <p style="text-align:center; color:gray; font-size:12px;">{reason}</p>"""
+    for d in data_list: html_body += generate_stock_html(d)
+    html_body += "</body></html>"
     
-    msg.attach(MIMEText(html, 'html', 'utf-8'))
+    msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+    
+    # 附加图片
     for d in data_list: 
         if d['chart_path']: attach_image(msg, d['chart_path'], d['chart_cid'])
 
@@ -173,15 +175,11 @@ def send_summary_report(data_list, reason):
 
 def run_monitor():
     db.init_db()
-    
-    # 强制调试逻辑
     force_reason = None
-    if datetime.now(TIMEZONE).weekday() >= 5: force_reason = "🚀 V5.1 调试报告"
+    if datetime.now(TIMEZONE).weekday() >= 5: force_reason = "🚀 V5.2 调试报告"
     
-    # 正常任务检查
     try:
-        tasks = health.get_pending_tasks()
-        for t, r in tasks: 
+        for t, r in health.get_pending_tasks():
             if t == 'REPORT_ALL': force_reason = r
     except: pass
 
@@ -210,25 +208,19 @@ def run_monitor():
                 'tech_analysis': tech_res,
                 'news': ai.get_latest_news(symbol),
                 'chart_path': plotter.generate_chart(symbol),
-                'chart_cid': f"chart_{symbol}_{datetime.now().strftime('%H%M%S')}"
+                'chart_cid': f"chart_{symbol}_{datetime.now().strftime('%H%M%S')}" # 唯一ID
             }
             
-            # AI 调用 (增加详细日志)
-            print(f"🧠 AI Thinking: {symbol}...")
+            print(f"🧠 AI: {symbol}...")
+            # 现在传4个参数不会报错了
             if not os.environ.get("LLM_BASE_URL"): os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
             
-            try:
-                ai_res = ai.analyze_market_move(symbol, pct, data['news'], tech_res)
-                # 🔥 调试打印：把 AI 返回的原始 JSON 打印出来，看看到底是不是空的
-                print(f"🔍 AI Raw Response: {ai_res}") 
-                
-                data['ai_summary'] = ai_res.get('summary', 'AI数据为空')
-                data['ai_left'] = ai_res.get('left_side_analysis', '-')
-                data['ai_right'] = ai_res.get('right_side_analysis', '-')
-            except Exception as e:
-                print(f"❌ AI Error: {e}")
-                data['ai_summary'] = f"AI Error: {str(e)}"
-
+            ai_res = ai.analyze_market_move(symbol, pct, data['news'], tech_res)
+            
+            data['ai_summary'] = ai_res.get('summary', 'AI空数据')
+            data['ai_left'] = ai_res.get('left_side_analysis', '-')
+            data['ai_right'] = ai_res.get('right_side_analysis', '-')
+            
             report_data.append(data)
             db.update_stock_state(symbol, today, determine_level(score), curr_price, score)
         except Exception as e:
@@ -236,6 +228,13 @@ def run_monitor():
 
     if force_reason and report_data:
         send_summary_report(report_data, force_reason)
+        
+    for d in report_data:
+        if d['chart_path'] and os.path.exists(d['chart_path']):
+            try: os.remove(d['chart_path'])
+            except: pass
+
+    db.log_system_run("SUCCESS", "Cycle Completed")
 
 if __name__ == "__main__":
     run_monitor()
