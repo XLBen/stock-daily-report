@@ -5,3 +5,6 @@ pytz
 openai
 matplotlib
 mplfinance
+lxml
+requests
+scipy
