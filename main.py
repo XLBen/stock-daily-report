@@ -8,75 +8,38 @@ import smtplib
 from email.mime.text import MIMEText
 from email.header import Header
 import numpy as np
-import ai
+import ai  # 确保你已经创建了 ai.py
 
 # --- 核心配置 ---
-STOCKS = ['AAPL', 'NVDA', 'TSLA', 'AMD', 'MSFT']
+STOCKS = ['NVDA', 'AAPL', 'TSLA'] # 我们主要测试 NVDA
 TIMEZONE = pytz.timezone('US/Eastern')
 
 # 状态定义
 LEVEL_NORMAL = 0
-LEVEL_NOTICE = 1   # 异常分 > 2.0
-LEVEL_WARNING = 2  # 异常分 > 3.0
-LEVEL_CRITICAL = 3 # 异常分 > 4.5
+LEVEL_NOTICE = 1   
+LEVEL_WARNING = 2  
+LEVEL_CRITICAL = 3 
 
 def is_trading_time():
-    """交易时间检查"""
-    #now = datetime.now(TIMEZONE)
-    # 暂时把周末检查注释掉，方便你现在测试
-    # if now.weekday() >= 5: return 0, "周末休市"
-    
-    current_time = now.time()
-    # 稍微放宽一点时间，方便测试
-    #if current_time < time(4, 0): return 1, "盘前等待"
-    return 2, "盘中/盘后交易"
-
-# --- 替代 pandas_ta 的原生计算函数 ---
-def calculate_rsi_native(series, period=14):
-    """手写 RSI 指标计算 (基于 Wilder's Smoothing)"""
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0))
-    loss = (-delta.where(delta < 0, 0))
-    
-    # 使用指数加权移动平均 (EWM) 模拟 Wilder 平滑
-    avg_gain = gain.ewm(com=period-1, min_periods=period).mean()
-    avg_loss = loss.ewm(com=period-1, min_periods=period).mean()
-    
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    """
+    【强制测试版】
+    无视真实时间，强制返回“盘中交易”状态
+    """
+    return 2, "🔥 强制测试模式 (上帝模式生效中)"
 
 def calculate_anomaly_score(symbol, current_price):
     """
-    计算波动异常分 (Z-Score / MAD)
+    【强制测试版】
+    无视真实股价，强制制造“惨案”
     """
-    try:
-        # 拉取过去 1 个月数据
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="1mo")
-        
-        if len(hist) < 20: return 0.0, 0.0
-
-        # --- 这里的计算不再依赖 pandas_ta ---
-        
-        # 1. 计算每日收益率
-        returns = hist['Close'].pct_change().dropna()
-        
-        # 2. 计算今日涨跌幅
-        prev_close = hist['Close'].iloc[-2]
-        current_pct = (current_price - prev_close) / prev_close
-        
-        # 3. 计算 MAD (中位数绝对偏差)
-        median_ret = returns.median()
-        mad = np.abs(returns - median_ret).median()
-        if mad == 0: mad = 0.001 
-
-        robust_sigma = 1.4826 * mad
-        score = np.abs(current_pct - median_ret) / robust_sigma
-
-        return score, current_pct * 100
-    except Exception as e:
-        print(f"算法错误 {symbol}: {e}")
-        return 0.0, 0.0
+    # ⚠️ 作弊代码：如果是 NVDA，强制返回暴跌数据
+    if symbol == 'NVDA':
+        fake_score = 5.5   # 超过 4.5 就是 Level 3 (熔断)
+        fake_pct = -8.88   # 假装跌了 8.88%
+        return fake_score, fake_pct
+    
+    # 其他股票保持正常（因为是周末，可能返回 0）
+    return 0.0, 0.0
 
 def determine_level(score):
     if score >= 4.5: return LEVEL_CRITICAL
@@ -89,57 +52,62 @@ def send_alert_email(symbol, level, price, change_pct, score):
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     
-    if not sender: return
+    if not sender: 
+        print("❌ 邮箱未配置")
+        return
 
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
     
-    # --- AI 介入开始 ---
-    print(f"🧠 正在调用 AI 分析 {symbol} 的波动原因...")
+    # --- AI 介入 ---
+    print(f"🧠 [测试] 正在调用 AI 分析 {symbol} ...")
     
-    # 1. 抓新闻
+    # 抓取真实新闻（虽然股价是假的，但新闻是真的）
     news = ai.get_latest_news(symbol)
     
-    # 2. 只有 Level 2 以上才花钱调 AI，省钱技巧
-    if level >= LEVEL_WARNING or abs(change_pct) > 3.0:
+    # 调用 AI
+    try:
         analysis = ai.analyze_market_move(symbol, change_pct, news)
-    else:
-        analysis = {"summary": "波动较小，未触发 AI 分析", "category": "常规波动", "risk": "低"}
-    # --- AI 介入结束 ---
-
+    except Exception as e:
+        analysis = {"summary": f"AI调用失败: {str(e)}", "category": "错误", "risk_level": "未知"}
+    
     level_tags = {
         LEVEL_NOTICE: "🟡 异动",
         LEVEL_WARNING: "🟠 警告",
         LEVEL_CRITICAL: "🔴 熔断"
     }
     
-    title = f"{level_tags.get(level, '通知')}：{symbol} {change_pct:+.2f}% | {analysis['category']}"
+    title = f"【测试报警】{symbol} {change_pct:.2f}% | {analysis.get('category', '未知')}"
     
-    # 构造 HTML 邮件 (比纯文本好看)
+    # HTML 邮件模板
     content = f"""
     <html>
     <body>
-        <h2>🚨 量化监控报警: {symbol}</h2>
-        <p><strong>现价:</strong> ${price:.2f} (<span style="color: {'red' if change_pct < 0 else 'green'}">{change_pct:+.2f}%</span>)</p>
-        <p><strong>异常评分:</strong> {score:.1f} (Level {level})</p>
+        <h2 style="color: red;">🚨 量化监控测试 (Level {level})</h2>
+        <p><strong>标的:</strong> {symbol}</p>
+        <p><strong>模拟涨跌:</strong> <span style="color: red; font-size: large;">{change_pct:.2f}%</span></p>
+        <p><strong>异常评分:</strong> {score:.1f}</p>
         
         <hr/>
-        <h3>🧠 AI 归因分析</h3>
+        <h3>🧠 AI 归因分析 (DeepSeek/OpenAI)</h3>
+        <div style="background-color: #f9f9f9; padding: 15px; border-left: 5px solid red;">
+            <p><strong>原因:</strong> {analysis.get('summary', '无内容')}</p>
+            <p><strong>分类:</strong> {analysis.get('category', '无')}</p>
+            <p><strong>风险:</strong> {analysis.get('risk_level', '无')}</p>
+            <p><strong>建议:</strong> {analysis.get('action_suggestion', '无')}</p>
+        </div>
+        
+        <hr/>
+        <h3>📰 真实抓取的新闻</h3>
         <ul>
-            <li><strong>原因:</strong> {analysis['summary']}</li>
-            <li><strong>分类:</strong> {analysis['category']}</li>
-            <li><strong>风险等级:</strong> {analysis['risk_level']}</li>
+            {''.join([f'<li>{n}</li>' for n in news[:3]])}
         </ul>
         
-        <hr/>
-        <h3>📰 相关新闻</h3>
-        <p>{'<br/>'.join(news[:3])}</p>
-        
-        <p style="font-size: small; color: gray;">生成时间: {datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}</p>
+        <p style="color: gray; font-size: 12px;">系统生成时间: {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S ET')}</p>
     </body>
     </html>
     """
     
-    message = MIMEText(content, 'html', 'utf-8') # 注意这里改成了 'html'
+    message = MIMEText(content, 'html', 'utf-8')
     message['From'] = sender
     message['To'] = ",".join(receivers)
     message['Subject'] = Header(title, 'utf-8')
@@ -149,55 +117,50 @@ def send_alert_email(symbol, level, price, change_pct, score):
         smtp_obj.login(sender, password)
         smtp_obj.sendmail(sender, receivers, message.as_string())
         smtp_obj.quit()
-        print(f"📧 智能报警邮件已发送: {symbol}")
+        print(f"✅ 邮件发送成功: {symbol}")
     except Exception as e:
-        print(f"❌ 发送失败: {e}")
-
-
+        print(f"❌ 邮件发送失败: {e}")
 
 def run_monitor():
     db.init_db()
-    status_code, status_msg = is_trading_time()
     
+    # 强制获取开盘状态
+    status_code, status_msg = is_trading_time()
     print(f"🚀 启动监控 - {status_msg}")
     
-    # 如果是休市，直接退出（为了测试，我在上面把周末判断临时关了）
-    if status_code == 0:
-        print("😴 休市中")
-        return
-
     today_str = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
     
+    # 我们只测试列表里的股票
     for symbol in STOCKS:
         try:
+            # 获取价格 (为了不报错，还是正常获取一下，虽然下面会用假数据覆盖)
             ticker = yf.Ticker(symbol)
-            # 使用 fast_info 获取实时价格
             try:
                 current_price = ticker.fast_info['last_price']
             except:
-                # 容错：如果 fast_info 拿不到，就拿历史数据最后一行
-                current_price = ticker.history(period='1d')['Close'].iloc[-1]
+                current_price = 100.0 # 容错兜底
             
+            # 使用作弊函数计算指标
             score, change_pct = calculate_anomaly_score(symbol, current_price)
             current_level = determine_level(score)
             
-            # 读取旧状态
-            prev_state = db.get_stock_state(symbol)
-            prev_level = prev_state['level'] if prev_state else 0
+            print(f"🔍 [测试] {symbol} | 模拟跌幅: {change_pct}% | Level: {current_level}")
             
-            print(f"🔍 {symbol}: ${current_price:.2f} | 涨跌: {change_pct:+.2f}% | 异常分: {score:.2f}")
-            
-            # 状态机升级判断
-            if current_level > prev_level and current_level >= LEVEL_NOTICE:
-                print(f"🔔 升级报警: {symbol}")
+            # 这里的逻辑修改了：只要是测试模式 (Level 3)，且是 NVDA，就强制发邮件
+            # 暂时无视状态机锁，确保你能收到邮件
+            if symbol == 'NVDA': 
+                print(f"🔔 触发测试报警: {symbol}")
                 send_alert_email(symbol, current_level, current_price, change_pct, score)
             
+            # 更新数据库 (假戏真做)
             db.update_stock_state(symbol, today_str, current_level, current_price, score)
             
         except Exception as e:
-            print(f"❌ {symbol} 失败: {e}")
+            print(f"❌ 处理 {symbol} 出错: {e}")
+            import traceback
+            traceback.print_exc()
 
-    db.log_system_run("SUCCESS", "Checked")
+    db.log_system_run("TEST_SUCCESS", "Forced Test Completed")
 
 if __name__ == "__main__":
     run_monitor()
