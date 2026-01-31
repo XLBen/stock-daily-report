@@ -4,8 +4,8 @@ from email.header import Header
 import yfinance as yf
 import os
 from datetime import datetime
+import base64
 
-# 配置部分：你想关注的股票代码（例如：AAPL=苹果, MSFT=微软, 0700.HK=腾讯）
 STOCKS = ['AAPL', 'MSFT', 'NVDA']
 
 def get_stock_data():
@@ -13,7 +13,6 @@ def get_stock_data():
     for symbol in STOCKS:
         try:
             ticker = yf.Ticker(symbol)
-            # 获取当天的最新数据
             hist = ticker.history(period="1d")
             if not hist.empty:
                 close_price = hist['Close'].iloc[0]
@@ -25,12 +24,13 @@ def get_stock_data():
     return msg_content
 
 def send_email(content):
-    # 从环境变量获取敏感信息
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver = os.environ.get('MAIL_RECEIVER')
-    
-    # 邮件构建
+
+    if not all([sender, password, receiver]):
+        raise RuntimeError("邮箱环境变量未正确设置")
+
     message = MIMEText(content, 'plain', 'utf-8')
     message['From'] = sender
     message['To'] = receiver
@@ -38,16 +38,23 @@ def send_email(content):
     message['Subject'] = Header(subject, 'utf-8')
 
     try:
-        # 这里以 Gmail 为例，如果是 QQ 邮箱使用 smtp.qq.com，端口 465 (SSL)
-        smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465) 
-        smtp_obj.login(sender, password)
-        smtp_obj.sendmail(sender, receiver, message.as_string())
-        smtp_obj.quit()
+        smtp = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        smtp.ehlo()
+
+        # 手动 AUTH PLAIN（关键）
+        auth_string = f"\0{sender}\0{password}"
+        auth_bytes = base64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
+        smtp.docmd("AUTH", "PLAIN " + auth_bytes)
+
+        smtp.sendmail(sender, receiver, message.as_string())
+        smtp.quit()
         print("邮件发送成功")
-    except smtplib.SMTPException as e:
-        print(f"邮件发送失败: {e}")
+
+    except Exception as e:
+        print("邮件发送失败：", e)
+        raise
 
 if __name__ == "__main__":
     stock_info = get_stock_data()
-    print(stock_info) # 在 Action 日志中打印以便调试
+    print(stock_info)
     send_email(stock_info)
