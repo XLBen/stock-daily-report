@@ -77,16 +77,51 @@ def determine_level(score):
     if score >= 2.0: return LEVEL_NOTICE
     return LEVEL_NORMAL
 
+def get_valuation_data(symbol):
+    """
+    获取估值数据 (PE, Forward PE, PEG, 52周位置)
+    """
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        
+        # 获取核心指标，如果拿不到就给 None
+        trailing_pe = info.get('trailingPE')
+        forward_pe = info.get('forwardPE')
+        peg_ratio = info.get('pegRatio')
+        price_to_book = info.get('priceToBook')
+        
+        # 计算当前价格在 52 周范围内的位置 (0% = 最低, 100% = 最高)
+        high_52 = info.get('fiftyTwoWeekHigh')
+        low_52 = info.get('fiftyTwoWeekLow')
+        current = info.get('currentPrice') or info.get('regularMarketPrice')
+        
+        position_52w = 0.5 # 默认中间
+        if high_52 and low_52 and current and high_52 != low_52:
+            position_52w = (current - low_52) / (high_52 - low_52)
+            
+        return {
+            "pe": trailing_pe,
+            "f_pe": forward_pe,
+            "peg": peg_ratio,
+            "pb": price_to_book,
+            "pos_52w": position_52w,
+            "low_52": low_52,
+            "high_52": high_52
+        }
+    except Exception as e:
+        print(f"[{symbol}] 估值数据获取失败: {e}")
+        return None
+
 def send_alert_email(symbol, level, price, change_pct, score):
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     
     if not sender: return
-
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
     
-    # AI 分析
+    # 1. AI 分析
     analysis = {}
     news = []
     if level >= LEVEL_WARNING or abs(change_pct) > 3.0:
@@ -94,11 +129,41 @@ def send_alert_email(symbol, level, price, change_pct, score):
         news = ai.get_latest_news(symbol)
         try:
             analysis = ai.analyze_market_move(symbol, change_pct, news)
-        except Exception as e:
+        except:
             analysis = {"summary": "AI不可用", "category": "错误", "risk_level": "未知"}
     else:
         analysis = {"summary": "波动未达阈值", "category": "常规", "risk_level": "低"}
         news = ai.get_latest_news(symbol)
+
+    # 2. 【新增】获取估值数据
+    val = get_valuation_data(symbol)
+    val_html = ""
+    if val:
+        # 简单的估值评价
+        peg_eval = "✅低估" if val['peg'] and val['peg'] < 1.0 else ("❌高估" if val['peg'] and val['peg'] > 2.0 else "合理")
+        pos_pct = val['pos_52w'] * 100
+        
+        val_html = f"""
+        <div style="background-color: #e8f4fd; padding: 10px; border-radius: 5px; margin-top: 10px;">
+            <p><strong>📊 估值看板:</strong></p>
+            <table style="width: 100%; font-size: 14px;">
+                <tr>
+                    <td>PE (静): <strong>{val['pe'] if val['pe'] else '-'}</strong></td>
+                    <td>PE (动): <strong>{val['f_pe'] if val['f_pe'] else '-'}</strong></td>
+                </tr>
+                <tr>
+                    <td>PEG: <strong>{val['peg'] if val['peg'] else '-'} ({peg_eval})</strong></td>
+                    <td>PB: <strong>{val['pb'] if val['pb'] else '-'}</strong></td>
+                </tr>
+                <tr>
+                    <td colspan="2">
+                        52周位置: <span style="color: {'green' if pos_pct < 20 else 'black'}">{pos_pct:.1f}%</span> 
+                        <span style="font-size: 10px; color: gray;">(低 {val['low_52']} - 高 {val['high_52']})</span>
+                    </td>
+                </tr>
+            </table>
+        </div>
+        """
 
     level_tags = {LEVEL_NOTICE: "🟡", LEVEL_WARNING: "🟠", LEVEL_CRITICAL: "🔴"}
     color = "red" if change_pct < 0 else "green"
@@ -111,7 +176,8 @@ def send_alert_email(symbol, level, price, change_pct, score):
         <h2>{symbol} 异常波动监控</h2>
         <p>现价: ${price:.2f} (<span style="color:{color}">{change_pct:+.2f}%</span>)</p>
         <p>异常分: {score:.1f}</p>
-        <hr/>
+        
+        {val_html} <hr/>
         <h3>AI 分析</h3>
         <p><strong>原因:</strong> {analysis.get('summary')}</p>
         <p><strong>风险:</strong> {analysis.get('risk_level')}</p>
