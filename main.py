@@ -8,6 +8,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.header import Header
 import numpy as np
+import ai
 
 # --- 核心配置 ---
 STOCKS = ['AAPL', 'NVDA', 'TSLA', 'AMD', 'MSFT']
@@ -88,30 +89,57 @@ def send_alert_email(symbol, level, price, change_pct, score):
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     
-    if not sender or not password or not receiver_env:
-        print("❌ Secrets 未配置，跳过邮件")
-        return
+    if not sender: return
 
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
     
+    # --- AI 介入开始 ---
+    print(f"🧠 正在调用 AI 分析 {symbol} 的波动原因...")
+    
+    # 1. 抓新闻
+    news = ai.get_latest_news(symbol)
+    
+    # 2. 只有 Level 2 以上才花钱调 AI，省钱技巧
+    if level >= LEVEL_WARNING or abs(change_pct) > 3.0:
+        analysis = ai.analyze_market_move(symbol, change_pct, news)
+    else:
+        analysis = {"summary": "波动较小，未触发 AI 分析", "category": "常规波动", "risk": "低"}
+    # --- AI 介入结束 ---
+
     level_tags = {
         LEVEL_NOTICE: "🟡 异动",
         LEVEL_WARNING: "🟠 警告",
         LEVEL_CRITICAL: "🔴 熔断"
     }
     
-    title = f"{level_tags.get(level, '通知')}：{symbol} {change_pct:+.2f}%"
+    title = f"{level_tags.get(level, '通知')}：{symbol} {change_pct:+.2f}% | {analysis['category']}"
     
+    # 构造 HTML 邮件 (比纯文本好看)
     content = f"""
-    【量化监控报警】
-    标的：{symbol}
-    价格：${price:.2f}
-    涨跌：{change_pct:+.2f}%
-    异常分：{score:.1f} (Level {level})
-    时间：{datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}
+    <html>
+    <body>
+        <h2>🚨 量化监控报警: {symbol}</h2>
+        <p><strong>现价:</strong> ${price:.2f} (<span style="color: {'red' if change_pct < 0 else 'green'}">{change_pct:+.2f}%</span>)</p>
+        <p><strong>异常评分:</strong> {score:.1f} (Level {level})</p>
+        
+        <hr/>
+        <h3>🧠 AI 归因分析</h3>
+        <ul>
+            <li><strong>原因:</strong> {analysis['summary']}</li>
+            <li><strong>分类:</strong> {analysis['category']}</li>
+            <li><strong>风险等级:</strong> {analysis['risk_level']}</li>
+        </ul>
+        
+        <hr/>
+        <h3>📰 相关新闻</h3>
+        <p>{'<br/>'.join(news[:3])}</p>
+        
+        <p style="font-size: small; color: gray;">生成时间: {datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}</p>
+    </body>
+    </html>
     """
     
-    message = MIMEText(content, 'plain', 'utf-8')
+    message = MIMEText(content, 'html', 'utf-8') # 注意这里改成了 'html'
     message['From'] = sender
     message['To'] = ",".join(receivers)
     message['Subject'] = Header(title, 'utf-8')
@@ -121,9 +149,11 @@ def send_alert_email(symbol, level, price, change_pct, score):
         smtp_obj.login(sender, password)
         smtp_obj.sendmail(sender, receivers, message.as_string())
         smtp_obj.quit()
-        print(f"📧 邮件已发送: {symbol}")
+        print(f"📧 智能报警邮件已发送: {symbol}")
     except Exception as e:
         print(f"❌ 发送失败: {e}")
+
+
 
 def run_monitor():
     db.init_db()
