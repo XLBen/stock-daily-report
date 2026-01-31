@@ -35,7 +35,6 @@ def is_trading_time():
     return 2, "盘中交易"
 
 def get_valuation_data(symbol):
-    """获取估值数据"""
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info
@@ -52,7 +51,6 @@ def get_valuation_data(symbol):
         return None
 
 def calculate_anomaly_score(symbol, current_price):
-    """计算异常分"""
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1mo")
@@ -76,109 +74,163 @@ def determine_level(score):
     if score >= 2.0: return LEVEL_NOTICE
     return LEVEL_NORMAL
 
-# --- 统一的邮件发送函数 ---
-def send_email_report(symbol, current_price, change_pct, score, level, is_alert=False, report_reason=None):
+# --- 📧 邮件发送模块 ---
+
+def send_single_alert(data):
+    """发送单只股票的报警邮件 (仅用于异常报警)"""
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     if not sender: return
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
+
+    symbol = data['symbol']
+    change_pct = data['change_pct']
+    level = data['level']
     
-    # 1. 抓取新闻
-    news = ai.get_latest_news(symbol)
+    # 标题
+    level_tags = {LEVEL_NOTICE: "🟡", LEVEL_WARNING: "🟠", LEVEL_CRITICAL: "🔴"}
+    subject = f"{level_tags.get(level)}报警：{symbol} {change_pct:+.2f}% | {data['ai_category']}"
     
-    # 2. 调用 AI 分析
-    analysis = {}
-    try:
-        analysis = ai.analyze_market_move(symbol, change_pct, news)
-        if not is_alert and report_reason:
-             if abs(change_pct) < 1.0 and analysis.get('category') == '无消息':
-                 analysis['summary'] = f"当前走势平稳，{report_reason}。"
-    except:
-        analysis = {"summary": "AI服务暂时不可用", "category": "系统错误"}
-
-    # 3. 估值数据
-    val = get_valuation_data(symbol)
-    val_html = ""
-    if val:
-        peg = val['peg']
-        peg_eval = "✅低估" if peg and peg < 1.0 else ("❌高估" if peg and peg > 2.0 else "合理")
-        
-        pos_pct = 50.0
-        if val['high_52'] and val['low_52'] and val['current'] and val['high_52'] != val['low_52']:
-            pos_pct = ((val['current'] - val['low_52']) / (val['high_52'] - val['low_52'])) * 100
-            
-        val_html = f"""
-        <div style="background-color: #f0f8ff; padding: 10px; border-radius: 5px; margin: 10px 0;">
-            <p><strong>📊 估值数据:</strong></p>
-            <table style="width: 100%; font-size: 13px;">
-                <tr><td>PE(静): {val['pe']}</td><td>PEG: {val['peg']} ({peg_eval})</td></tr>
-                <tr><td colspan="2">52周位置: <span style="color: {'green' if pos_pct<20 else 'red' if pos_pct>80 else 'black'}">{pos_pct:.1f}%</span></td></tr>
-            </table>
-        </div>
-        """
-
-    # 4. 生成K线图
-    chart_path = plotter.generate_chart(symbol)
-    chart_html = f'<div style="text-align: center;"><img src="cid:chart_image" style="width: 100%; max-width: 600px;"></div>' if chart_path else ""
-
-    # 5. 构建邮件
     msg = MIMEMultipart()
-    
-    if is_alert:
-        level_tags = {LEVEL_NOTICE: "🟡", LEVEL_WARNING: "🟠", LEVEL_CRITICAL: "🔴"}
-        subject = f"{level_tags.get(level)}报警：{symbol} {change_pct:+.2f}% | {analysis.get('category')}"
-        title_color = "red" if change_pct < 0 else "green"
-        header_text = f"{symbol} 异常波动报警 (Level {level})"
-    else:
-        subject = f"{report_reason}：{symbol} {change_pct:+.2f}% | 状态分析"
-        title_color = "#333"
-        header_text = f"{symbol} 市场状态报告 - {report_reason}"
-
     msg['Subject'] = Header(subject, 'utf-8')
     msg['From'] = sender
     msg['To'] = ",".join(receivers)
 
-    content = f"""
+    # 生成正文 HTML
+    body_html = generate_stock_html(data, is_summary=False)
+    msg.attach(MIMEText(body_html, 'html', 'utf-8'))
+
+    # 嵌入图片
+    if data['chart_path']:
+        attach_image(msg, data['chart_path'], data['chart_cid'])
+
+    send_smtp(sender, password, receivers, msg)
+    print(f"🔔 单独报警已发送: {symbol}")
+
+def send_summary_report(data_list, report_reason):
+    """发送汇总报告邮件 (包含所有股票)"""
+    if not data_list: return
+    
+    sender = os.environ.get('MAIL_USER')
+    password = os.environ.get('MAIL_PASS')
+    receiver_env = os.environ.get('MAIL_RECEIVER')
+    if not sender: return
+    receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
+
+    # 汇总标题
+    # 挑出涨跌幅最大的作为标题亮点
+    sorted_stocks = sorted(data_list, key=lambda x: abs(x['change_pct']), reverse=True)
+    top_stock = sorted_stocks[0]
+    subject = f"{report_reason}：{top_stock['symbol']} {top_stock['change_pct']:+.2f}% 等{len(data_list)}只 | 市场概览"
+
+    msg = MIMEMultipart()
+    msg['Subject'] = Header(subject, 'utf-8')
+    msg['From'] = sender
+    msg['To'] = ",".join(receivers)
+
+    # 拼接所有股票的 HTML
+    full_content = f"""
     <html>
-    <body>
-        <h2 style="color: {title_color}; border-bottom: 2px solid #eee;">{header_text}</h2>
-        <p><strong>现价: ${current_price:.2f}</strong> (<span style="color:{'red' if change_pct < 0 else 'green'}">{change_pct:+.2f}%</span>)</p>
+    <body style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
+        <h2 style="text-align: center; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px;">
+            📋 {report_reason}
+        </h2>
+        <p style="text-align: center; color: gray; font-size: 12px;">
+            生成时间: {datetime.now(TIMEZONE).strftime('%Y-%m-%d %H:%M:%S ET')}
+        </p>
+    """
+    
+    for data in data_list:
+        full_content += generate_stock_html(data, is_summary=True)
+        full_content += "<hr style='border: 0; border-top: 4px solid #eee; margin: 30px 0;' />"
+        
+    full_content += "</body></html>"
+    msg.attach(MIMEText(full_content, 'html', 'utf-8'))
+
+    # 批量嵌入所有图片
+    for data in data_list:
+        if data['chart_path']:
+            attach_image(msg, data['chart_path'], data['chart_cid'])
+
+    send_smtp(sender, password, receivers, msg)
+    print(f"✅ 汇总报告已发送: {report_reason}")
+
+# --- 🛠 辅助函数 ---
+
+def generate_stock_html(data, is_summary=False):
+    """生成单只股票的 HTML 卡片"""
+    symbol = data['symbol']
+    pct = data['change_pct']
+    color = "red" if pct < 0 else "green"
+    
+    # 估值部分
+    val_html = ""
+    val = data['valuation']
+    if val:
+        peg_eval = "✅低估" if val['peg'] and val['peg'] < 1.0 else ("❌高估" if val['peg'] and val['peg'] > 2.0 else "合理")
+        pos_pct = 50.0
+        if val['high_52'] and val['low_52'] and val['high_52'] != val['low_52']:
+            pos_pct = ((val['current'] - val['low_52']) / (val['high_52'] - val['low_52'])) * 100
+        
+        val_html = f"""
+        <div style="background-color: #f8f9fa; padding: 10px; border-radius: 5px; font-size: 13px; margin: 10px 0;">
+            <table style="width: 100%;">
+                <tr><td>PE(静): {val['pe']}</td><td>PEG: {val['peg']} ({peg_eval})</td></tr>
+                <tr><td colspan="2">52周: <span style="color: {'green' if pos_pct<20 else 'red' if pos_pct>80 else 'black'}">{pos_pct:.1f}%</span> (Low ${val['low_52']} - High ${val['high_52']})</td></tr>
+            </table>
+        </div>
+        """
+
+    # 图片部分 (注意 cid 的引用)
+    chart_html = ""
+    if data['chart_path']:
+        chart_html = f'<div style="text-align: center; margin: 10px 0;"><img src="cid:{data["chart_cid"]}" style="width: 100%; max-width: 600px; border: 1px solid #ddd;"></div>'
+    else:
+        chart_html = f'<p style="color:red; text-align:center;">[图表生成失败]</p>'
+
+    return f"""
+    <div style="margin-bottom: 20px;">
+        <h3 style="margin: 0;">
+            {symbol} <span style="color: {color}; font-size: 18px;">{pct:+.2f}%</span> 
+            <span style="font-size: 14px; color: #666; font-weight: normal;">(${data['price']:.2f})</span>
+        </h3>
         
         {val_html}
         {chart_html}
         
-        <div style="background-color: #fafafa; padding: 15px; margin-top: 15px; border-left: 4px solid #007bff;">
-            <h3>🧠 AI 状态分析</h3>
-            <p><strong>摘要:</strong> {analysis.get('summary')}</p>
-            <p><strong>分类:</strong> {analysis.get('category')} | <strong>风险:</strong> {analysis.get('risk_level')}</p>
-            <p><strong>建议:</strong> {analysis.get('action_suggestion')}</p>
+        <div style="background-color: #eef6fc; padding: 10px; border-left: 3px solid #007bff; font-size: 14px;">
+            <strong>🧠 AI:</strong> {data['ai_summary']}
         </div>
         
-        <h4>📰 最新资讯</h4>
-        <ul>{''.join([f'<li>{n}</li>' for n in news[:3]])}</ul>
-        
-        <p style="color: gray; font-size: 10px;">Generated by QuantBot at {datetime.now(TIMEZONE).strftime('%H:%M ET')}</p>
-    </body>
-    </html>
+        <div style="font-size: 12px; color: #666; margin-top: 5px;">
+            <strong>📰 新闻:</strong> {' | '.join(data['news'][:2])}
+        </div>
+    </div>
     """
-    msg.attach(MIMEText(content, 'html', 'utf-8'))
 
-    if chart_path:
-        with open(chart_path, 'rb') as f:
+def attach_image(msg, path, cid):
+    """将图片作为附件嵌入邮件"""
+    try:
+        with open(path, 'rb') as f:
             mime_img = MIMEImage(f.read())
-            mime_img.add_header('Content-ID', '<chart_image>')
+            # 这里的 cid 必须要带尖括号 <>
+            mime_img.add_header('Content-ID', f'<{cid}>')
             msg.attach(mime_img)
-        os.remove(chart_path)
+        # 发送完如果需要可以删除，或者最后统一删除
+    except Exception as e:
+        print(f"⚠️ 图片嵌入失败 {path}: {e}")
 
+def send_smtp(sender, password, receivers, msg):
     try:
         smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         smtp_obj.login(sender, password)
         smtp_obj.sendmail(sender, receivers, msg.as_string())
         smtp_obj.quit()
-        print(f"✅ 报告已发送: {symbol} ({'报警' if is_alert else '报告'})")
     except Exception as e:
-        print(f"❌ 发送失败: {e}")
+        print(f"❌ SMTP 发送失败: {e}")
+
+# --- 🚀 主程序 ---
 
 def run_monitor():
     db.init_db()
@@ -187,8 +239,7 @@ def run_monitor():
     tasks = []
     try:
         tasks = health.get_pending_tasks()
-    except Exception as e:
-        print(f"⚠️ 调度检查失败: {e}")
+    except:
         traceback.print_exc()
 
     force_report_reason = None
@@ -198,58 +249,99 @@ def run_monitor():
             print(f"📋 触发全员报告任务: {reason}")
             break
 
-    # 2. 市场状态检查
     status_code, status_msg = is_trading_time()
     print(f"🚀 启动监控 - {status_msg}")
 
+    # 如果休市且无报告任务，退出
     if status_code == 0 and not force_report_reason:
-        print("😴 市场休眠且无定时任务...")
+        print("😴 休市且无任务...")
         return
 
     today_str = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
+    report_data_list = [] # 用于收集所有股票数据
 
     for symbol in STOCKS:
         try:
-            # 获取数据
+            # A. 获取数据
             ticker = yf.Ticker(symbol)
             try:
                 current_price = ticker.fast_info['last_price']
             except:
                 hist = ticker.history(period='1d')
-                if hist.empty: continue
+                if hist.empty: 
+                    print(f"⚠️ {symbol} 无数据")
+                    continue
                 current_price = hist['Close'].iloc[-1]
 
             score, change_pct = calculate_anomaly_score(symbol, current_price)
             current_level = determine_level(score)
             
-            # --- 逻辑分叉 ---
-            # 路径 A: 强制报告 (定时任务)
-            if force_report_reason:
-                print(f"📤 发送定时报告: {symbol}")
-                send_email_report(symbol, current_price, change_pct, score, current_level, is_alert=False, report_reason=force_report_reason)
+            # B. 准备数据包
+            stock_data = {
+                'symbol': symbol,
+                'price': current_price,
+                'change_pct': change_pct,
+                'level': current_level,
+                'score': score,
+                'valuation': get_valuation_data(symbol),
+                'news': ai.get_latest_news(symbol),
+                # 预留 AI 字段
+                'ai_summary': 'AI分析中...',
+                'ai_category': '未知',
+                # 画图 (带唯一ID)
+                'chart_path': plotter.generate_chart(symbol),
+                'chart_cid': f"chart_{symbol}_{datetime.now().strftime('%H%M%S')}" # 唯一CID
+            }
             
-            # 路径 B: 异常报警 (原有逻辑)
+            # C. 调用 AI (如果需要)
+            # 策略：如果是强制报告，或者有报警，都调 AI
+            if force_report_reason or current_level >= LEVEL_WARNING or abs(change_pct) > 2.0:
+                try:
+                    analysis = ai.analyze_market_move(symbol, change_pct, stock_data['news'])
+                    stock_data['ai_summary'] = analysis.get('summary', '无')
+                    stock_data['ai_category'] = analysis.get('category', '常规')
+                except:
+                    stock_data['ai_summary'] = "AI 服务不可用"
             else:
+                stock_data['ai_summary'] = "波动较小，维持关注"
+
+            # D. 逻辑分叉
+            
+            # 1. 异常报警：立即单独发！
+            # 只有在开盘期间，且级别够高时才发
+            if status_code != 0:
                 prev_state = db.get_stock_state(symbol)
                 prev_level = prev_state['level'] if prev_state else 0
-                
                 is_level_up = (current_level > prev_level)
-                is_critical = (current_level == LEVEL_CRITICAL)
                 
-                if status_code != 0:
-                    if (is_level_up and current_level >= LEVEL_NOTICE) or is_critical:
-                        print(f"🔔 触发异常报警: {symbol}")
-                        # ⚠️ 之前报错就在这里，现在已经修复 ⬇️
-                        send_email_report(symbol, current_price, change_pct, score, current_level, is_alert=True)
+                if (is_level_up and current_level >= LEVEL_NOTICE) or current_level == LEVEL_CRITICAL:
+                    print(f"🔔 触发单独报警: {symbol}")
+                    send_single_alert(stock_data)
+
+            # 2. 收集数据用于汇总报告
+            report_data_list.append(stock_data)
             
-            # 更新状态
+            # 更新数据库
             db.update_stock_state(symbol, today_str, current_level, current_price, score)
 
         except Exception as e:
             print(f"❌ 处理 {symbol} 失败: {e}")
             traceback.print_exc()
 
-    db.log_system_run("SUCCESS", f"Cycle Done. Report: {force_report_reason if force_report_reason else 'None'}")
+    # E. 循环结束，发送汇总报告
+    if force_report_reason and report_data_list:
+        print(f"📤 正在生成汇总报告 ({len(report_data_list)}只股票)...")
+        send_summary_report(report_data_list, force_report_reason)
+        
+    # 清理临时图片
+    for data in report_data_list:
+        if data.get('chart_path') and os.path.exists(data['chart_path']):
+            try:
+                os.remove(data['chart_path'])
+            except:
+                pass
+
+    db.log_system_run("SUCCESS", "Cycle Completed")
 
 if __name__ == "__main__":
     try:
