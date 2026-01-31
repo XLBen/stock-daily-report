@@ -16,7 +16,11 @@ import plotter
 import traceback
 from technical import TechnicalAnalyzer
 
-STOCKS = ['NVDA', 'AAPL', 'TSLA', 'AMD', 'MSFT', 'META', 'GOOGL']
+STOCKS = [
+    'SGLN.L', 'GDGB.L', 'MSFT', 'MA', 'META', 'XAUUSD=X', 
+    'USAR', 'RKLB', 'GOOGL', 'EQGB.L', 'EQQQ.L', 'NVDA', 
+    'QQQ3.L', 'VUAG.L', 'POET', 'STLD', 'KO'
+]
 TIMEZONE = pytz.timezone('US/Eastern')
 LEVEL_NORMAL = 0
 LEVEL_NOTICE = 1   
