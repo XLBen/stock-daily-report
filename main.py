@@ -1,87 +1,148 @@
+import yfinance as yf
+import pandas as pd
+import pandas_ta as ta
+import pytz
+from datetime import datetime, time
+import db
+import os
 import smtplib
 from email.mime.text import MIMEText
 from email.header import Header
-import yfinance as yf
-import os
-from datetime import datetime
+import numpy as np
 
-# 你的关注列表
-STOCKS = ['AAPL', 'MSFT', 'NVDA']
+# --- 核心配置 ---
+STOCKS = ['AAPL', 'NVDA', 'TSLA', 'AMD', 'MSFT']
+TIMEZONE = pytz.timezone('US/Eastern')
 
-def get_stock_data():
-    msg_content = "今日量化简报 (MA5策略观察)：\n\n"
-    
-    for symbol in STOCKS:
-        try:
-            ticker = yf.Ticker(symbol)
-            # 修改点1：我们需要更多历史数据来计算均线，这里拉取过去1个月
-            hist = ticker.history(period="1mo")
-            
-            if len(hist) >= 5:
-                # 获取最新一天的收盘价
-                current_price = hist['Close'].iloc[-1]
-                
-                # 修改点2：计算 5日移动平均线 (MA5)
-                # rolling(5) 表示取5天窗口，mean() 表示求平均
-                hist['MA5'] = hist['Close'].rolling(window=5).mean()
-                ma5_price = hist['MA5'].iloc[-1]
-                
-                # 修改点3：进行逻辑判断 (量化分析的核心)
-                if current_price > ma5_price:
-                    trend = "📈 强势 (高于均线)"
-                else:
-                    trend = "📉 弱势 (低于均线)"
-                
-                # 计算偏离度 (看看现在的价格偏离平均值多少百分比)
-                diff_percent = ((current_price - ma5_price) / ma5_price) * 100
-                
-                msg_content += f"【{symbol}】\n"
-                msg_content += f"现价: ${current_price:.2f}\n"
-                msg_content += f"MA5均价: ${ma5_price:.2f}\n"
-                msg_content += f"趋势判断: {trend}\n"
-                msg_content += f"偏离幅度: {diff_percent:+.2f}%\n"
-                msg_content += "-" * 20 + "\n"
-                
-            else:
-                msg_content += f"{symbol}: 数据不足，无法计算均线\n"
-                
-        except Exception as e:
-            msg_content += f"{symbol}: 分析出错 ({str(e)})\n"
-            
-    return msg_content
+# 状态定义
+LEVEL_NORMAL = 0
+LEVEL_NOTICE = 1   # 异常分 > 2.0 (微小异动)
+LEVEL_WARNING = 2  # 异常分 > 3.0 (重点关注)
+LEVEL_CRITICAL = 3 # 异常分 > 4.5 (极端行情)
 
-def send_email(content):
+def is_trading_time():
+    """交易时间检查 (保持不变)"""
+    now = datetime.now(TIMEZONE)
+    if now.weekday() >= 5: return 0, "周末休市"
+    current_time = now.time()
+    if current_time < time(9, 30): return 1, "盘前时段"
+    elif current_time > time(16, 0): return 1, "盘后时段"
+    return 2, "盘中交易"
+
+def calculate_anomaly_score(symbol, current_price):
+    """
+    核心算法：计算波动异常分 (Z-Score 变体)
+    使用 MAD (中位数绝对偏差) 代替标准差，对极端值更稳健
+    """
+    try:
+        # 拉取过去 1 个月数据计算波动率基准
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1mo")
+        
+        if len(hist) < 20: return 0.0 # 数据不足
+
+        # 计算每日收益率
+        returns = hist['Close'].pct_change().dropna()
+        
+        # 计算今日的涨跌幅
+        prev_close = hist['Close'].iloc[-2]
+        current_pct = (current_price - prev_close) / prev_close
+        
+        # 计算历史波动基准 (MAD)
+        median_ret = returns.median()
+        # MAD = median(|x - median|)
+        mad = np.abs(returns - median_ret).median()
+        
+        if mad == 0: mad = 0.001 # 防止除零
+
+        # 异常分 = |今日涨跌 - 历史中位数| / (MAD * 常数)
+        # 1.4826 是正态分布下的调整因子
+        robust_sigma = 1.4826 * mad
+        score = np.abs(current_pct - median_ret) / robust_sigma
+        
+        return score, current_pct * 100
+    except Exception as e:
+        print(f"算法错误 {symbol}: {e}")
+        return 0.0, 0.0
+
+def determine_level(score):
+    """根据异常分决定报警级别"""
+    if score >= 4.5: return LEVEL_CRITICAL
+    if score >= 3.0: return LEVEL_WARNING
+    if score >= 2.0: return LEVEL_NOTICE
+    return LEVEL_NORMAL
+
+def send_alert_email(symbol, level, price, change_pct, score):
+    """发送报警邮件"""
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     
     if not sender or not password or not receiver_env:
-        print("环境配置错误，请检查 Secrets")
+        print("❌ 未配置邮箱 Secrets，跳过发送")
         return
 
-    if ',' in receiver_env:
-        receivers = receiver_env.split(',')
-    else:
-        receivers = [receiver_env]
+    receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
+    
+    level_tags = {
+        LEVEL_NOTICE: "🟡 异动提醒",
+        LEVEL_WARNING: "🟠 异常警告",
+        LEVEL_CRITICAL: "🔴 熔断级警报"
+    }
+    
+    title = f"{level_tags.get(level, '通知')}：{symbol} 波动异常 ({change_pct:+.2f}%)"
+    
+    content = f"""
+    【量化监控报警】
+    
+    标的：{symbol}
+    现价：${price:.2f}
+    涨跌幅：{change_pct:+.2f}%
+    
+    --- 量化指标 ---
+    异常评分：{score:.1f} (正常值 < 2.0)
+    判定级别：Level {level}
+    
+    触发时间：{datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}
+    """
     
     message = MIMEText(content, 'plain', 'utf-8')
     message['From'] = sender
     message['To'] = ",".join(receivers)
-    
-    subject = f"股票量化日报 - {datetime.now().strftime('%Y-%m-%d')}"
-    message['Subject'] = Header(subject, 'utf-8')
+    message['Subject'] = Header(title, 'utf-8')
 
     try:
-        # 如果是 QQ 邮箱请改用 smtp.qq.com
-        smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465) 
+        smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465)
         smtp_obj.login(sender, password)
         smtp_obj.sendmail(sender, receivers, message.as_string())
         smtp_obj.quit()
-        print(f"分析报告已发送给: {receivers}")
-    except smtplib.SMTPException as e:
-        print(f"发送失败: {e}")
+        print(f"📧 报警邮件已发送: {symbol}")
+    except Exception as e:
+        print(f"❌ 邮件发送失败: {e}")
 
-if __name__ == "__main__":
-    analysis = get_stock_data()
-    print(analysis) # 在日志里打印出来方便检查
-    send_email(analysis)
+def run_monitor():
+    db.init_db()
+    status_code, status_msg = is_trading_time()
+    
+    print(f"🚀 启动监控 - {status_msg}")
+    
+    # 状态机：如果不在盘中，我们依然可以运行数据更新，但不发 Level 2 以下的报警
+    # 这里为了演示，我们假设任何时候都可以测试
+    
+    today_str = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
+    
+    for symbol in STOCKS:
+        try:
+            # 1. 获取最新数据
+            ticker = yf.Ticker(symbol)
+            current_price = ticker.fast_info['last_price']
+            
+            # 2. 计算量化指标
+            score, change_pct = calculate_anomaly_score(symbol, current_price)
+            current_level = determine_level(score)
+            
+            # 3. 读取数据库中的旧状态
+            prev_state = db.get_stock_state(symbol)
+            prev_level = prev_state['level'] if prev_state else 0
+            
+            print(f"🔍 {symbol}: ${current_price:.2f} | 涨跌: {change_pct:+.2f}% | 异常
