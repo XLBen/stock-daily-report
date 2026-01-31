@@ -72,7 +72,7 @@ def calculate_anomaly_score(symbol, current_price):
 
         robust_sigma = 1.4826 * mad
         score = np.abs(current_pct - median_ret) / robust_sigma
-        
+        return 5.0, -8.5
         return score, current_pct * 100
     except Exception as e:
         print(f"算法错误 {symbol}: {e}")
