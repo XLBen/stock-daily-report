@@ -1,12 +1,13 @@
-# 锁定 numpy 在 2.0 以下，因为 2.0 会破坏大多数旧量化库
+# 锁定 numpy 防止新版冲突
 numpy>=1.23.0,<2.0.0
 
-# 锁定 pandas 在 2.x 版本，既支持新特性又兼容 pandas_ta
+# 锁定 pandas 在 2.0~2.1 区间，兼容性最好
 pandas>=2.0.0,<2.2.0
 
 # 基础库
 yfinance
 pytz
 
-# 从 GitHub 安装 pandas_ta 的开发版（修复了部分 Pandas 2.0 兼容性问题）
-pandas_ta @ git+https://github.com/twopirllc/pandas-ta.git@development
+# 【核心修改】不要用 git+https，直接用 zip 包下载链接
+# 这样 pip 会直接下载文件并解压安装，不需要 git clone 权限
+https://github.com/twopirllc/pandas-ta/archive/development.zip
