@@ -76,7 +76,7 @@ def determine_level(score):
     if score >= 2.0: return LEVEL_NOTICE
     return LEVEL_NORMAL
 
-# --- 统一的邮件发送函数 (可处理报警 或 强制报告) ---
+# --- 统一的邮件发送函数 ---
 def send_email_report(symbol, current_price, change_pct, score, level, is_alert=False, report_reason=None):
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
@@ -88,14 +88,10 @@ def send_email_report(symbol, current_price, change_pct, score, level, is_alert=
     news = ai.get_latest_news(symbol)
     
     # 2. 调用 AI 分析
-    # 如果是强制报告，提示词稍微温和一点；如果是报警，提示词紧急一点
     analysis = {}
     try:
-        # 这里我们在 ai.py 内部并没有区分 prompt，但可以通过“change_pct”的大小传达信息
-        # 未来可以优化 ai.py 接受 extra_instruction
         analysis = ai.analyze_market_move(symbol, change_pct, news)
         if not is_alert and report_reason:
-             # 如果只是定时报告且波动不大，手动覆盖 AI 的“无消息”摘要，避免尴尬
              if abs(change_pct) < 1.0 and analysis.get('category') == '无消息':
                  analysis['summary'] = f"当前走势平稳，{report_reason}。"
     except:
@@ -108,7 +104,6 @@ def send_email_report(symbol, current_price, change_pct, score, level, is_alert=
         peg = val['peg']
         peg_eval = "✅低估" if peg and peg < 1.0 else ("❌高估" if peg and peg > 2.0 else "合理")
         
-        # 计算52周位置
         pos_pct = 50.0
         if val['high_52'] and val['low_52'] and val['current'] and val['high_52'] != val['low_52']:
             pos_pct = ((val['current'] - val['low_52']) / (val['high_52'] - val['low_52'])) * 100
@@ -136,7 +131,6 @@ def send_email_report(symbol, current_price, change_pct, score, level, is_alert=
         title_color = "red" if change_pct < 0 else "green"
         header_text = f"{symbol} 异常波动报警 (Level {level})"
     else:
-        # 定时报告模式
         subject = f"{report_reason}：{symbol} {change_pct:+.2f}% | 状态分析"
         title_color = "#333"
         header_text = f"{symbol} 市场状态报告 - {report_reason}"
@@ -189,8 +183,7 @@ def send_email_report(symbol, current_price, change_pct, score, level, is_alert=
 def run_monitor():
     db.init_db()
     
-    # 1. 获取调度任务 (health.py 负责判断是否需要发报告)
-    # 返回格式: [('REPORT_ALL', '启动报告'), ...]
+    # 1. 获取调度任务
     tasks = []
     try:
         tasks = health.get_pending_tasks()
@@ -198,7 +191,6 @@ def run_monitor():
         print(f"⚠️ 调度检查失败: {e}")
         traceback.print_exc()
 
-    # 检查是否有“全员报告”任务
     force_report_reason = None
     for task_type, reason in tasks:
         if task_type == 'REPORT_ALL':
@@ -210,8 +202,6 @@ def run_monitor():
     status_code, status_msg = is_trading_time()
     print(f"🚀 启动监控 - {status_msg}")
 
-    # 如果市场休市，但有强制报告任务（比如 20:00 的晚报），依然要执行
-    # 如果没有任务且休市，则退出
     if status_code == 0 and not force_report_reason:
         print("😴 市场休眠且无定时任务...")
         return
@@ -233,7 +223,6 @@ def run_monitor():
             current_level = determine_level(score)
             
             # --- 逻辑分叉 ---
-            
             # 路径 A: 强制报告 (定时任务)
             if force_report_reason:
                 print(f"📤 发送定时报告: {symbol}")
@@ -247,8 +236,24 @@ def run_monitor():
                 is_level_up = (current_level > prev_level)
                 is_critical = (current_level == LEVEL_CRITICAL)
                 
-                # 只有在市场开启时才报警
                 if status_code != 0:
                     if (is_level_up and current_level >= LEVEL_NOTICE) or is_critical:
                         print(f"🔔 触发异常报警: {symbol}")
-                        send_email_report(symbol, current_price, change_pct, score, current_level, is_alert
+                        # ⚠️ 之前报错就在这里，现在已经修复 ⬇️
+                        send_email_report(symbol, current_price, change_pct, score, current_level, is_alert=True)
+            
+            # 更新状态
+            db.update_stock_state(symbol, today_str, current_level, current_price, score)
+
+        except Exception as e:
+            print(f"❌ 处理 {symbol} 失败: {e}")
+            traceback.print_exc()
+
+    db.log_system_run("SUCCESS", f"Cycle Done. Report: {force_report_reason if force_report_reason else 'None'}")
+
+if __name__ == "__main__":
+    try:
+        run_monitor()
+    except Exception as e:
+        print(f"❌ 致命错误: {e}")
+        exit(1)
