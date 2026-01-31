@@ -26,34 +26,39 @@ def get_stock_data():
 def send_email(content):
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
-    receiver = os.environ.get('MAIL_RECEIVER')
+    receiver_env = os.environ.get('MAIL_RECEIVER') # 获取那串长字符串
 
-    if not all([sender, password, receiver]):
-        raise RuntimeError("邮箱环境变量未正确设置")
-
+    # --- 关键修改：处理多个邮箱 ---
+    if ',' in receiver_env:
+        # 如果发现有逗号，就切割成一个列表 ['a@a.com', 'b@b.com']
+        receivers = receiver_env.split(',')
+    else:
+        # 如果只有一个邮箱，就把它放进列表里
+        receivers = [receiver_env]
+    
+    # 邮件构建
     message = MIMEText(content, 'plain', 'utf-8')
     message['From'] = sender
-    message['To'] = receiver
+    # 邮件头部的 "To" 显示所有收件人，用逗号连接
+    message['To'] = ",".join(receivers)
+    
     subject = f"股票更新 - {datetime.now().strftime('%Y-%m-%d')}"
     message['Subject'] = Header(subject, 'utf-8')
 
     try:
-        smtp = smtplib.SMTP_SSL('smtp.gmail.com', 465)
-        smtp.ehlo()
-
-        # 手动 AUTH PLAIN（关键）
-        auth_string = f"\0{sender}\0{password}"
-        auth_bytes = base64.b64encode(auth_string.encode("utf-8")).decode("utf-8")
-        smtp.docmd("AUTH", "PLAIN " + auth_bytes)
-
-        smtp.sendmail(sender, receiver, message.as_string())
-        smtp.quit()
-        print("邮件发送成功")
-
-    except Exception as e:
-        print("邮件发送失败：", e)
-        raise
-
+        smtp_obj = smtplib.SMTP_SSL('smtp.gmail.com', 465) 
+        # 注意：如果你用的是 QQ 邮箱，记得把上面改成 'smtp.qq.com'
+        
+        smtp_obj.login(sender, password)
+        
+        # --- 关键修改：发送给列表里的所有人 ---
+        smtp_obj.sendmail(sender, receivers, message.as_string())
+        
+        smtp_obj.quit()
+        print(f"邮件已成功发送给: {receivers}")
+    except smtplib.SMTPException as e:
+        print(f"邮件发送失败: {e}")
+        
 if __name__ == "__main__":
     stock_info = get_stock_data()
     print(stock_info)
