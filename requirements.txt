@@ -1,13 +1,4 @@
-# 锁定 numpy 防止新版冲突
-numpy>=1.23.0,<2.0.0
-
-# 锁定 pandas 在 2.0~2.1 区间，兼容性最好
-pandas>=2.0.0,<2.2.0
-
-# 基础库
 yfinance
+pandas
+numpy
 pytz
-
-# 【核心修改】不要用 git+https，直接用 zip 包下载链接
-# 这样 pip 会直接下载文件并解压安装，不需要 git clone 权限
-https://github.com/twopirllc/pandas-ta/archive/development.zip

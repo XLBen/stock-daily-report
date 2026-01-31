@@ -1,6 +1,5 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 import pytz
 from datetime import datetime, time
 import db
@@ -16,47 +15,60 @@ TIMEZONE = pytz.timezone('US/Eastern')
 
 # 状态定义
 LEVEL_NORMAL = 0
-LEVEL_NOTICE = 1   # 异常分 > 2.0 (微小异动)
-LEVEL_WARNING = 2  # 异常分 > 3.0 (重点关注)
-LEVEL_CRITICAL = 3 # 异常分 > 4.5 (极端行情)
+LEVEL_NOTICE = 1   # 异常分 > 2.0
+LEVEL_WARNING = 2  # 异常分 > 3.0
+LEVEL_CRITICAL = 3 # 异常分 > 4.5
 
 def is_trading_time():
-    """交易时间检查 (保持不变)"""
+    """交易时间检查"""
     now = datetime.now(TIMEZONE)
-    if now.weekday() >= 5: return 0, "周末休市"
+    # 暂时把周末检查注释掉，方便你现在测试
+    # if now.weekday() >= 5: return 0, "周末休市"
+    
     current_time = now.time()
-    if current_time < time(9, 30): return 1, "盘前时段"
-    elif current_time > time(16, 0): return 1, "盘后时段"
-    return 2, "盘中交易"
+    # 稍微放宽一点时间，方便测试
+    if current_time < time(4, 0): return 1, "盘前等待"
+    return 2, "盘中/盘后交易"
+
+# --- 替代 pandas_ta 的原生计算函数 ---
+def calculate_rsi_native(series, period=14):
+    """手写 RSI 指标计算 (基于 Wilder's Smoothing)"""
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0))
+    loss = (-delta.where(delta < 0, 0))
+    
+    # 使用指数加权移动平均 (EWM) 模拟 Wilder 平滑
+    avg_gain = gain.ewm(com=period-1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period-1, min_periods=period).mean()
+    
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 def calculate_anomaly_score(symbol, current_price):
     """
-    核心算法：计算波动异常分 (Z-Score 变体)
-    使用 MAD (中位数绝对偏差) 代替标准差，对极端值更稳健
+    计算波动异常分 (Z-Score / MAD)
     """
     try:
-        # 拉取过去 1 个月数据计算波动率基准
+        # 拉取过去 1 个月数据
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1mo")
         
-        if len(hist) < 20: return 0.0 # 数据不足
+        if len(hist) < 20: return 0.0, 0.0
 
-        # 计算每日收益率
+        # --- 这里的计算不再依赖 pandas_ta ---
+        
+        # 1. 计算每日收益率
         returns = hist['Close'].pct_change().dropna()
         
-        # 计算今日的涨跌幅
+        # 2. 计算今日涨跌幅
         prev_close = hist['Close'].iloc[-2]
         current_pct = (current_price - prev_close) / prev_close
         
-        # 计算历史波动基准 (MAD)
+        # 3. 计算 MAD (中位数绝对偏差)
         median_ret = returns.median()
-        # MAD = median(|x - median|)
         mad = np.abs(returns - median_ret).median()
-        
-        if mad == 0: mad = 0.001 # 防止除零
+        if mad == 0: mad = 0.001 
 
-        # 异常分 = |今日涨跌 - 历史中位数| / (MAD * 常数)
-        # 1.4826 是正态分布下的调整因子
         robust_sigma = 1.4826 * mad
         score = np.abs(current_pct - median_ret) / robust_sigma
         
@@ -66,44 +78,37 @@ def calculate_anomaly_score(symbol, current_price):
         return 0.0, 0.0
 
 def determine_level(score):
-    """根据异常分决定报警级别"""
     if score >= 4.5: return LEVEL_CRITICAL
     if score >= 3.0: return LEVEL_WARNING
     if score >= 2.0: return LEVEL_NOTICE
     return LEVEL_NORMAL
 
 def send_alert_email(symbol, level, price, change_pct, score):
-    """发送报警邮件"""
     sender = os.environ.get('MAIL_USER')
     password = os.environ.get('MAIL_PASS')
     receiver_env = os.environ.get('MAIL_RECEIVER')
     
     if not sender or not password or not receiver_env:
-        print("❌ 未配置邮箱 Secrets，跳过发送")
+        print("❌ Secrets 未配置，跳过邮件")
         return
 
     receivers = receiver_env.split(',') if ',' in receiver_env else [receiver_env]
     
     level_tags = {
-        LEVEL_NOTICE: "🟡 异动提醒",
-        LEVEL_WARNING: "🟠 异常警告",
-        LEVEL_CRITICAL: "🔴 熔断级警报"
+        LEVEL_NOTICE: "🟡 异动",
+        LEVEL_WARNING: "🟠 警告",
+        LEVEL_CRITICAL: "🔴 熔断"
     }
     
-    title = f"{level_tags.get(level, '通知')}：{symbol} 波动异常 ({change_pct:+.2f}%)"
+    title = f"{level_tags.get(level, '通知')}：{symbol} {change_pct:+.2f}%"
     
     content = f"""
     【量化监控报警】
-    
     标的：{symbol}
-    现价：${price:.2f}
-    涨跌幅：{change_pct:+.2f}%
-    
-    --- 量化指标 ---
-    异常评分：{score:.1f} (正常值 < 2.0)
-    判定级别：Level {level}
-    
-    触发时间：{datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}
+    价格：${price:.2f}
+    涨跌：{change_pct:+.2f}%
+    异常分：{score:.1f} (Level {level})
+    时间：{datetime.now(TIMEZONE).strftime('%H:%M:%S ET')}
     """
     
     message = MIMEText(content, 'plain', 'utf-8')
@@ -116,9 +121,9 @@ def send_alert_email(symbol, level, price, change_pct, score):
         smtp_obj.login(sender, password)
         smtp_obj.sendmail(sender, receivers, message.as_string())
         smtp_obj.quit()
-        print(f"📧 报警邮件已发送: {symbol}")
+        print(f"📧 邮件已发送: {symbol}")
     except Exception as e:
-        print(f"❌ 邮件发送失败: {e}")
+        print(f"❌ 发送失败: {e}")
 
 def run_monitor():
     db.init_db()
@@ -126,23 +131,43 @@ def run_monitor():
     
     print(f"🚀 启动监控 - {status_msg}")
     
-    # 状态机：如果不在盘中，我们依然可以运行数据更新，但不发 Level 2 以下的报警
-    # 这里为了演示，我们假设任何时候都可以测试
-    
+    # 如果是休市，直接退出（为了测试，我在上面把周末判断临时关了）
+    if status_code == 0:
+        print("😴 休市中")
+        return
+
     today_str = datetime.now(TIMEZONE).strftime('%Y-%m-%d')
     
     for symbol in STOCKS:
         try:
-            # 1. 获取最新数据
             ticker = yf.Ticker(symbol)
-            current_price = ticker.fast_info['last_price']
+            # 使用 fast_info 获取实时价格
+            try:
+                current_price = ticker.fast_info['last_price']
+            except:
+                # 容错：如果 fast_info 拿不到，就拿历史数据最后一行
+                current_price = ticker.history(period='1d')['Close'].iloc[-1]
             
-            # 2. 计算量化指标
             score, change_pct = calculate_anomaly_score(symbol, current_price)
             current_level = determine_level(score)
             
-            # 3. 读取数据库中的旧状态
+            # 读取旧状态
             prev_state = db.get_stock_state(symbol)
             prev_level = prev_state['level'] if prev_state else 0
             
-            print(f"🔍 {symbol}: ${current_price:.2f} | 涨跌: {change_pct:+.2f}% | 异常
+            print(f"🔍 {symbol}: ${current_price:.2f} | 涨跌: {change_pct:+.2f}% | 异常分: {score:.2f}")
+            
+            # 状态机升级判断
+            if current_level > prev_level and current_level >= LEVEL_NOTICE:
+                print(f"🔔 升级报警: {symbol}")
+                send_alert_email(symbol, current_level, current_price, change_pct, score)
+            
+            db.update_stock_state(symbol, today_str, current_level, current_price, score)
+            
+        except Exception as e:
+            print(f"❌ {symbol} 失败: {e}")
+
+    db.log_system_run("SUCCESS", "Checked")
+
+if __name__ == "__main__":
+    run_monitor()
