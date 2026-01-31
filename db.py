@@ -5,22 +5,14 @@ from datetime import datetime
 DB_NAME = 'quant_state.db'
 
 def get_connection():
-    """获取数据库连接，启用 WAL 模式以提高并发安全性"""
     conn = sqlite3.connect(DB_NAME)
-    # 开启 Write-Ahead Logging 模式，适合频繁读写
     conn.execute('PRAGMA journal_mode=WAL')
-    conn.row_factory = sqlite3.Row  # 让返回结果像字典一样既可通过下标访问，也可通过列名访问
+    conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    """初始化数据库表结构"""
     with get_connection() as conn:
-        # 创建状态表
-        # symbol: 股票代码
-        # last_update_date: 最后更新日期 (用于每日重置)
-        # level: 当前报警级别 (0=Normal, 1=Notice, 2=Warning, 3=Critical)
-        # last_price: 上次记录的价格
-        # volatility_score: 记录当前的波动率异常分
+        # 1. 股票状态表 (原有)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS stock_states (
                 symbol TEXT PRIMARY KEY,
@@ -32,7 +24,16 @@ def init_db():
             )
         ''')
         
-        # 创建系统日志表 (用于监控运行健康度)
+        # 2. 系统元数据表 (新增：用于记录启动时间、里程碑完成情况)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS system_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 3. 日志表 (原有)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS system_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,17 +43,28 @@ def init_db():
             )
         ''')
 
+# --- 新增：元数据读写通用函数 ---
+def get_meta(key):
+    with get_connection() as conn:
+        cursor = conn.execute('SELECT value FROM system_meta WHERE key = ?', (key,))
+        row = cursor.fetchone()
+        return row['value'] if row else None
+
+def set_meta(key, value):
+    with get_connection() as conn:
+        conn.execute('''
+            INSERT INTO system_meta (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+        ''', (key, str(value)))
+
+# --- 原有的股票操作函数保持不变 ---
 def get_stock_state(symbol):
-    """查询单只股票的状态"""
     with get_connection() as conn:
         cursor = conn.execute('SELECT * FROM stock_states WHERE symbol = ?', (symbol,))
         row = cursor.fetchone()
-        if row:
-            return dict(row)
-        return None
+        return dict(row) if row else None
 
 def update_stock_state(symbol, date, level, price, vol_score):
-    """更新股票状态 (Upsert: 有则更新，无则插入)"""
     with get_connection() as conn:
         conn.execute('''
             INSERT INTO stock_states (symbol, last_update_date, level, last_price, volatility_score, updated_at)
@@ -66,6 +78,5 @@ def update_stock_state(symbol, date, level, price, vol_score):
         ''', (symbol, date, level, price, vol_score))
 
 def log_system_run(status, message):
-    """记录系统运行日志"""
     with get_connection() as conn:
         conn.execute('INSERT INTO system_logs (status, message) VALUES (?, ?)', (status, message))

@@ -42,16 +42,24 @@ jobs:
 
       # 核心改动：如果数据库变了，提交回仓库
       - name: Commit State Database
+        # 只有当 Run Monitor Engine 成功，或者即使失败了也要尝试保存(视情况而定)
+        if: success() || failure() 
         run: |
           git config --global user.name 'QuantBot'
           git config --global user.email 'bot@noreply.github.com'
-          
-          # 检查数据库文件是否有变动
           if [[ -n $(git status -s quant_state.db) ]]; then
-            echo "💾 Detected state change, saving database..."
             git add quant_state.db
-            git commit -m "Auto-save: Update quant state [skip ci]"
+            git commit -m "Auto-save state [skip ci]"
             git push
-          else
-            echo "💤 No state change, skipping save."
           fi
+
+      # 【新增】如果上面的运行失败了，利用 Github 插件发邮件 (或者仅仅依靠 GitHub 自己的通知)
+      # 由于在 Actions 里配 SMTP 很麻烦，最简单的办法是利用 Actions 自带的 failure 通知
+      # 你需要在 GitHub 网页 Settings -> Notifications 里开启 "Email me for failed workflow runs"
+      
+      # 这里演示一种打印大字报的方法，方便你在 Actions 页面一眼看到
+      - name: ❌ CRITICAL FAILURE NOTIFICATION
+        if: failure()
+        run: |
+          echo "::error::系统运行失败！请检查日志！"
+          echo "Please check GitHub Actions logs immediately."
