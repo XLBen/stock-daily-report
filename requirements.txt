@@ -8,3 +8,7 @@ mplfinance
 lxml
 requests
 scipy
+alpaca-py
+apscheduler
+websockets
+discord.py

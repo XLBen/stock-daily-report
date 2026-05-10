@@ -1,22 +1,14 @@
-name: Quant Monitor (Heartbeat)
+name: Quant Monitor (CI Only)
 
 on:
-  schedule:
-    # 核心改动：周一到周五，每 20 分钟运行一次
-    # 注意：Python 脚本内部会再次判断是否是美股盘中，不在盘中会直接退出，不耗资源
-    - cron: '*/20 * * * 1-5'
-  
-  # 允许手动触发
   workflow_dispatch:
 
-# 核心改动：赋予 Actions 写权限，允许它提交数据库文件
 permissions:
   contents: write
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -31,37 +23,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Monitor Engine
+      - name: Run Dry-Run Test Cycle
         env:
-          MAIL_USER: ${{ secrets.MAIL_USER }}
-          MAIL_PASS: ${{ secrets.MAIL_PASS }}
-          MAIL_RECEIVER: ${{ secrets.MAIL_RECEIVER }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-        run: python main.py
-
-      # 核心改动：如果数据库变了，提交回仓库
-      - name: Commit State Database
-        # 只有当 Run Monitor Engine 成功，或者即使失败了也要尝试保存(视情况而定)
-        if: success() || failure() 
-        run: |
-          git config --global user.name 'QuantBot'
-          git config --global user.email 'bot@noreply.github.com'
-          if [[ -n $(git status -s quant_state.db) ]]; then
-            git add quant_state.db
-            git commit -m "Auto-save state [skip ci]"
-            # 加入 pull --rebase 解决 rejected 冲突
-            git pull --rebase origin main
-            git push origin main
-          fi
-
-      # 【新增】如果上面的运行失败了，利用 Github 插件发邮件 (或者仅仅依靠 GitHub 自己的通知)
-      # 由于在 Actions 里配 SMTP 很麻烦，最简单的办法是利用 Actions 自带的 failure 通知
-      # 你需要在 GitHub 网页 Settings -> Notifications 里开启 "Email me for failed workflow runs"
-      
-      # 这里演示一种打印大字报的方法，方便你在 Actions 页面一眼看到
-      - name: ❌ CRITICAL FAILURE NOTIFICATION
-        if: failure()
-        run: |
-          echo "::error::系统运行失败！请检查日志！"
-          echo "Please check GitHub Actions logs immediately."
+          ALPACA_KEY_LEFT: ${{ secrets.ALPACA_KEY_LEFT }}
+          ALPACA_SECRET_LEFT: ${{ secrets.ALPACA_SECRET_LEFT }}
+          ALPACA_KEY_RIGHT: ${{ secrets.ALPACA_KEY_RIGHT }}
+          ALPACA_SECRET_RIGHT: ${{ secrets.ALPACA_SECRET_RIGHT }}
+          ALPACA_KEY_EXTREME: ${{ secrets.ALPACA_KEY_EXTREME }}
+          ALPACA_SECRET_EXTREME: ${{ secrets.ALPACA_SECRET_EXTREME }}
+        run: python main.py --test-cycle --dry-run
